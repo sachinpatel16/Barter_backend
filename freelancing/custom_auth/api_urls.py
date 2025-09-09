@@ -68,25 +68,19 @@ urlpatterns = [
     
     path("v1/deal-stats/", api.DealStatsViewSet.as_view({'get': 'list'}), name="deal-stats"),
     
-    # Loyalty System URLs
-    path("v1/visit-tracking/", api.UserVisitTrackingViewSet.as_view({'get': 'list', 'post': 'create'}), name="visit-tracking"),
-    path("v1/visit-tracking/track-visit/", api.UserVisitTrackingViewSet.as_view({'post': 'track_visit'}), name="track-visit"),
-    path("v1/visit-tracking/<int:pk>/", api.UserVisitTrackingViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name="visit-tracking-detail"),
     
-    path("v1/loyalty-programs/", api.MerchantLoyaltyProgramViewSet.as_view({'get': 'list', 'post': 'create'}), name="loyalty-programs"),
-    path("v1/loyalty-programs/<int:pk>/", api.MerchantLoyaltyProgramViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name="loyalty-program-detail"),
-    path("v1/loyalty-programs/stats/", api.MerchantLoyaltyProgramViewSet.as_view({'get': 'stats'}), name="loyalty-program-stats"),
+    # Simple Voucher System URLs
+    path("v1/simple-visits/", api.SimpleVisitViewSet.as_view({'get': 'list', 'post': 'create'}), name="simple-visits"),
+    path("v1/simple-visits/track-visit/", api.SimpleVisitViewSet.as_view({'post': 'track_visit'}), name="simple-track-visit"),
+    path("v1/simple-visits/<int:pk>/", api.SimpleVisitViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name="simple-visit-detail"),
     
-    path("v1/loyalty-rewards/", api.UserLoyaltyRewardViewSet.as_view({'get': 'list', 'post': 'create'}), name="loyalty-rewards"),
-    path("v1/loyalty-rewards/<int:pk>/", api.UserLoyaltyRewardViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name="loyalty-reward-detail"),
-    path("v1/loyalty-rewards/<int:pk>/use/", api.UserLoyaltyRewardViewSet.as_view({'post': 'use_reward'}), name="use-loyalty-reward"),
-    path("v1/loyalty-rewards/give-manual/", api.UserLoyaltyRewardViewSet.as_view({'post': 'give_manual_reward'}), name="give-manual-reward"),
-    
-    # Comprehensive History APIs
-    path("v1/history/point-history/", api.ComprehensiveHistoryViewSet.as_view({'get': 'point_history'}), name="comprehensive-point-history"),
-    path("v1/history/merchant-point-flow/", api.ComprehensiveHistoryViewSet.as_view({'get': 'merchant_point_flow'}), name="merchant-point-flow"),
-    path("v1/history/reward-usage-history/", api.ComprehensiveHistoryViewSet.as_view({'get': 'reward_usage_history'}), name="reward-usage-history"),
-    path("v1/history/merchant-reward-given/", api.ComprehensiveHistoryViewSet.as_view({'get': 'merchant_reward_given'}), name="merchant-reward-given"),
+    path("v1/store-vouchers/", api.StoreVoucherViewSet.as_view({'get': 'list', 'post': 'create'}), name="store-vouchers"),
+    path("v1/store-vouchers/give-voucher/", api.StoreVoucherViewSet.as_view({'post': 'give_voucher'}), name="give-voucher"),
+    path("v1/store-vouchers/use-voucher/", api.StoreVoucherViewSet.as_view({'post': 'use_voucher'}), name="use-voucher"),
+    path("v1/store-vouchers/my-vouchers/", api.StoreVoucherViewSet.as_view({'get': 'my_vouchers'}), name="my-vouchers"),
+    path("v1/store-vouchers/voucher-stats/", api.StoreVoucherViewSet.as_view({'get': 'voucher_stats'}), name="voucher-stats"),
+    path("v1/store-vouchers/<int:pk>/", api.StoreVoucherViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name="store-voucher-detail"),
+    path("v1/store-vouchers/<int:pk>/cancel-voucher/", api.StoreVoucherViewSet.as_view({'post': 'cancel_voucher'}), name="cancel-voucher"),
 
     path("", include(router.urls))
 ]

@@ -431,7 +431,7 @@ class LoginOtp(BaseModel):
     """
     user_mobile = PhoneNumberField()
     otp = models.IntegerField()
-    expiration_time = models.DateTimeField(default=set_otp_reset_expiration_time)
+    expiration_time = models.DateTimeField(default=timezone.now)
 
     def save(self, *args, **kwargs):
         if not self.expiration_time:
@@ -442,7 +442,7 @@ class LoginOtp(BaseModel):
 class StudentOTP(BaseModel):
     email = models.EmailField(_("email"))
     otp = models.PositiveIntegerField(_("OTP"), null=True, blank=True)
-    expiration_time = models.DateTimeField(default=set_otp_expiration_time)
+    expiration_time = models.DateTimeField(default=timezone.now)
     is_verified = models.BooleanField(default=0)
 
     def save(self, *args, **kwargs):
@@ -741,23 +741,14 @@ class MerchantPointsTransfer(BaseModel):
 
 # ===== LOYALTY SYSTEM MODELS =====
 
-class UserVisitTracking(BaseModel):
-    """Track user visits to merchants for loyalty program"""
-    user = models.ForeignKey(ApplicationUser, on_delete=models.CASCADE, related_name='merchant_visits')
-    merchant = models.ForeignKey(MerchantProfile, on_delete=models.CASCADE, related_name='user_visits')
+# ===== SIMPLE VOUCHER SYSTEM =====
+
+class SimpleVisit(BaseModel):
+    """Simple visit tracking for voucher system"""
+    user = models.ForeignKey(ApplicationUser, on_delete=models.CASCADE, related_name='simple_visits')
+    merchant = models.ForeignKey(MerchantProfile, on_delete=models.CASCADE, related_name='simple_visits')
     visit_date = models.DateTimeField(auto_now_add=True)
-    visit_type = models.CharField(
-        max_length=20,
-        choices=[
-            ('physical', 'Physical Visit'),
-            ('online', 'Online Visit'),
-            ('purchase', 'Purchase Made'),
-            ('redemption', 'Voucher Redeemed'),
-        ],
-        default='physical'
-    )
-    visit_notes = models.TextField(blank=True, null=True)
-    location = models.CharField(max_length=255, blank=True, null=True)  # GPS or address
+    notes = models.TextField(blank=True, null=True)  # Optional merchant notes
     
     class Meta:
         ordering = ['-visit_date']
@@ -767,105 +758,76 @@ class UserVisitTracking(BaseModel):
         return f"{self.user.fullname} visited {self.merchant.business_name} on {self.visit_date.date()}"
 
 
-class MerchantLoyaltyProgram(BaseModel):
-    """Merchant loyalty program settings"""
-    merchant = models.OneToOneField(MerchantProfile, on_delete=models.CASCADE, related_name='loyalty_program')
-    
-    # Loyalty settings
-    is_active = models.BooleanField(default=True)
-    visits_required = models.PositiveIntegerField(default=3, help_text="Number of visits required for reward")
-    reward_type = models.CharField(
-        max_length=20,
-        choices=[
-            ('voucher', 'Gift Voucher'),
-            ('points', 'Points Bonus'),
-            ('discount', 'Discount Percentage'),
-            ('free_item', 'Free Item'),
-        ],
-        default='voucher'
-    )
-    
-    # Voucher settings
-    voucher_title = models.CharField(max_length=255, default="Loyalty Reward Voucher")
-    voucher_message = models.TextField(default="Thank you for your loyalty! Here's a special reward for you.")
-    voucher_value = models.DecimalField(max_digits=10, decimal_places=2, default=50.00)
-    voucher_expiry_days = models.PositiveIntegerField(default=30)
-    
-    # Points settings
-    points_bonus = models.DecimalField(max_digits=10, decimal_places=2, default=100.00)
-    
-    # Discount settings
-    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=10.00)
-    discount_max_amount = models.DecimalField(max_digits=10, decimal_places=2, default=500.00)
-    
-    # Free item settings
-    free_item_name = models.CharField(max_length=255, blank=True, null=True)
-    free_item_description = models.TextField(blank=True, null=True)
-    
-    # Auto-generation settings
-    auto_generate_rewards = models.BooleanField(default=True)
-    cooldown_days = models.PositiveIntegerField(default=7, help_text="Days to wait before next reward")
-    
-    def __str__(self):
-        return f"Loyalty Program - {self.merchant.business_name}"
-
-
-class UserLoyaltyReward(BaseModel):
-    """Track loyalty rewards given to users"""
-    REWARD_STATUS = (
-        ('pending', 'Pending'),
+class StoreVoucher(BaseModel):
+    """Simple voucher model for store-specific vouchers"""
+    VOUCHER_STATUS = (
         ('active', 'Active'),
         ('used', 'Used'),
         ('expired', 'Expired'),
         ('cancelled', 'Cancelled'),
     )
     
-    user = models.ForeignKey(ApplicationUser, on_delete=models.CASCADE, related_name='loyalty_rewards')
-    merchant = models.ForeignKey(MerchantProfile, on_delete=models.CASCADE, related_name='loyalty_rewards_given')
-    loyalty_program = models.ForeignKey(MerchantLoyaltyProgram, on_delete=models.CASCADE, related_name='rewards')
+    # Basic voucher info
+    voucher_code = models.CharField(max_length=20, unique=True, default="")
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
     
-    # Reward details
-    reward_type = models.CharField(max_length=20, choices=MerchantLoyaltyProgram._meta.get_field('reward_type').choices)
-    status = models.CharField(max_length=20, choices=REWARD_STATUS, default='pending')
+    # Store specific
+    merchant = models.ForeignKey(MerchantProfile, on_delete=models.CASCADE, related_name='store_vouchers')
+    user = models.ForeignKey(ApplicationUser, on_delete=models.CASCADE, related_name='store_vouchers')
     
     # Voucher details
-    voucher_title = models.CharField(max_length=255, blank=True, null=True)
-    voucher_message = models.TextField(blank=True, null=True)
-    voucher_value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    voucher_code = models.CharField(max_length=50, unique=True, null=True, blank=True)
+    discount_type = models.CharField(max_length=10, choices=[('percentage', 'Percentage'), ('fixed', 'Fixed Amount')], default='percentage')
+    discount_value = models.DecimalField(max_digits=10, decimal_places=2)  # Percentage or amount
+    max_discount_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)  # For percentage discounts
     
-    # Points details
-    points_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    
-    # Discount details
-    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
-    discount_max_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    
-    # Free item details
-    free_item_name = models.CharField(max_length=255, blank=True, null=True)
-    free_item_description = models.TextField(blank=True, null=True)
-    
-    # Timing
+    # Usage
+    status = models.CharField(max_length=20, choices=VOUCHER_STATUS, default='active')
     expiry_date = models.DateTimeField()
     used_at = models.DateTimeField(null=True, blank=True)
+    used_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     
-    # Usage tracking
-    usage_location = models.CharField(max_length=255, blank=True, null=True)
+    # Notes
+    merchant_notes = models.TextField(blank=True, null=True)
     usage_notes = models.TextField(blank=True, null=True)
     
     class Meta:
         ordering = ['-create_time']
     
     def __str__(self):
-        return f"Loyalty Reward - {self.user.fullname} from {self.merchant.business_name}"
+        return f"{self.title} - {self.voucher_code} ({self.merchant.business_name})"
     
     def is_expired(self):
         return timezone.now() > self.expiry_date
     
-    def mark_used(self, location=None, notes=None):
-        """Mark reward as used"""
+    def can_use(self):
+        return (self.status == 'active' and 
+                not self.is_expired() and 
+                self.merchant.user.is_active)
+    
+    def save(self, *args, **kwargs):
+        """Override save to generate voucher code if not provided"""
+        if not self.voucher_code:
+            self.voucher_code = f"VOUCHER_{uuid.uuid4().hex[:8].upper()}"
+        super().save(*args, **kwargs)
+    
+    def use_voucher(self, amount, notes=None):
+        """Use the voucher and calculate discount"""
+        if not self.can_use():
+            return None, "Voucher cannot be used"
+        
+        if self.discount_type == 'percentage':
+            discount = (amount * self.discount_value) / 100
+            if self.max_discount_amount:
+                discount = min(discount, self.max_discount_amount)
+        else:  # fixed amount
+            discount = min(self.discount_value, amount)
+        
+        # Mark as used
         self.status = 'used'
         self.used_at = timezone.now()
-        self.usage_location = location
+        self.used_amount = discount
         self.usage_notes = notes
         self.save()
+        
+        return discount, "Voucher used successfully"

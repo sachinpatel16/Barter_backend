@@ -14,7 +14,7 @@ from freelancing.custom_auth.models import (ApplicationUser, CustomPermission,
                                             Category, WalletHistory, RazorpayTransaction,
                                             MerchantDeal, MerchantDealRequest, MerchantDealConfirmation, 
                                             MerchantNotification, MerchantPointsTransfer, DealPointUsage,
-                                            UserVisitTracking, MerchantLoyaltyProgram, UserLoyaltyReward
+                                            SimpleVisit, StoreVoucher
                                         )
 from freelancing.utils.validation import UniqueNameMixin
 
@@ -683,75 +683,71 @@ class DealStatsSerializer(serializers.Serializer):
     total_points_used = serializers.DecimalField(max_digits=12, decimal_places=2)
 
 
-# ===== LOYALTY SYSTEM SERIALIZERS =====
 
-class UserVisitTrackingSerializer(serializers.ModelSerializer):
+
+# ===== SIMPLE VOUCHER SYSTEM SERIALIZERS =====
+
+class SimpleVisitSerializer(serializers.ModelSerializer):
+    """Serializer for simple visit tracking"""
     user_name = serializers.CharField(source='user.fullname', read_only=True)
     merchant_name = serializers.CharField(source='merchant.business_name', read_only=True)
     
     class Meta:
-        model = UserVisitTracking
+        model = SimpleVisit
         fields = [
-            'id', 'user', 'user_name', 'merchant', 'merchant_name', 'visit_date',
-            'visit_type', 'visit_notes', 'location', 'is_active', 'create_time'
+            'id', 'user', 'user_name', 'merchant', 'merchant_name',
+            'visit_date', 'notes', 'create_time'
         ]
-        read_only_fields = ['id', 'create_time']
+        read_only_fields = ['id', 'user_name', 'merchant_name', 'create_time']
 
 
-class MerchantLoyaltyProgramSerializer(serializers.ModelSerializer):
+class StoreVoucherSerializer(serializers.ModelSerializer):
+    """Serializer for store vouchers"""
     merchant_name = serializers.CharField(source='merchant.business_name', read_only=True)
-    
-    class Meta:
-        model = MerchantLoyaltyProgram
-        fields = [
-            'id', 'merchant', 'merchant_name', 'is_active', 'visits_required', 'reward_type',
-            'voucher_title', 'voucher_message', 'voucher_value', 'voucher_expiry_days',
-            'points_bonus', 'discount_percentage', 'discount_max_amount',
-            'free_item_name', 'free_item_description', 'auto_generate_rewards', 'cooldown_days',
-            'is_active', 'create_time', 'update_time'
-        ]
-        read_only_fields = ['id', 'create_time', 'update_time']
-
-
-class UserLoyaltyRewardSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.fullname', read_only=True)
-    merchant_name = serializers.CharField(source='merchant.business_name', read_only=True)
     is_expired = serializers.SerializerMethodField()
+    can_use = serializers.SerializerMethodField()
     
     class Meta:
-        model = UserLoyaltyReward
+        model = StoreVoucher
         fields = [
-            'id', 'user', 'user_name', 'merchant', 'merchant_name', 'loyalty_program',
-            'reward_type', 'status', 'voucher_title', 'voucher_message', 'voucher_value',
-            'voucher_code', 'points_amount', 'discount_percentage', 'discount_max_amount',
-            'free_item_name', 'free_item_description', 'expiry_date', 'used_at',
-            'usage_location', 'usage_notes', 'is_expired', 'create_time'
+            'id', 'voucher_code', 'title', 'description', 'merchant', 'merchant_name',
+            'user', 'user_name', 'discount_type', 'discount_value', 'max_discount_amount',
+            'status', 'expiry_date', 'used_at', 'used_amount', 'merchant_notes',
+            'usage_notes', 'is_expired', 'can_use', 'create_time'
         ]
-        read_only_fields = ['id', 'create_time', 'voucher_code']
+        read_only_fields = ['id', 'voucher_code', 'merchant_name', 'user_name', 'used_at', 'used_amount', 'create_time']
     
     def get_is_expired(self, obj):
         return obj.is_expired()
+    
+    def get_can_use(self, obj):
+        return obj.can_use()
 
 
+class CreateVoucherSerializer(serializers.ModelSerializer):
+    """Serializer for creating vouchers by merchant"""
+    class Meta:
+        model = StoreVoucher
+        fields = [
+            'title', 'description', 'discount_type', 'discount_value', 
+            'max_discount_amount', 'expiry_date', 'merchant_notes'
+        ]
+    
+    def create(self, validated_data):
+        validated_data['merchant'] = self.context['request'].user.merchant_profile
+        validated_data['user'] = self.context['user']
+        return super().create(validated_data)
 
 
+class UseVoucherSerializer(serializers.Serializer):
+    """Serializer for using vouchers"""
+    voucher_code = serializers.CharField(max_length=20)
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0.01)
+    notes = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
-class LoyaltyStatsSerializer(serializers.Serializer):
-    """Serializer for loyalty program statistics"""
-    total_visits = serializers.IntegerField()
-    total_rewards_given = serializers.IntegerField()
-    active_rewards = serializers.IntegerField()
-    used_rewards = serializers.IntegerField()
-    expired_rewards = serializers.IntegerField()
-    total_points_given = serializers.DecimalField(max_digits=12, decimal_places=2)
-    average_visits_per_user = serializers.DecimalField(max_digits=5, decimal_places=2)
-    top_visiting_users = serializers.ListField()
-
-
-class VisitTrackingSerializer(serializers.Serializer):
-    """Serializer for tracking user visits"""
+class TrackVisitSerializer(serializers.Serializer):
+    """Serializer for tracking visits"""
     merchant_id = serializers.IntegerField()
-    visit_type = serializers.ChoiceField(choices=UserVisitTracking._meta.get_field('visit_type').choices)
-    visit_notes = serializers.CharField(required=False, allow_blank=True)
-    location = serializers.CharField(required=False, allow_blank=True)
+    notes = serializers.CharField(required=False, allow_blank=True)

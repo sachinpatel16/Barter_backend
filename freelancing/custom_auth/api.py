@@ -37,7 +37,7 @@ from freelancing.custom_auth.models import (ApplicationUser, LoginOtp, CustomBla
                                         WalletHistory, RazorpayTransaction, MerchantDeal, 
                                         MerchantDealRequest, MerchantDealConfirmation, 
                                         MerchantNotification, MerchantPointsTransfer, DealPointUsage,
-                                        UserVisitTracking, MerchantLoyaltyProgram, UserLoyaltyReward)
+                                        SimpleVisit, StoreVoucher)
 from freelancing.custom_auth.permissions import IsSelf
 from freelancing.custom_auth.serializers import (BaseUserSerializer,
                                                 ChangePasswordSerializer,
@@ -53,9 +53,8 @@ from freelancing.custom_auth.serializers import (BaseUserSerializer,
                                                 MerchantDealCreateSerializer, MerchantDealRequestSerializer, 
                                                 MerchantDealConfirmationSerializer, MerchantNotificationSerializer,
                                                 MerchantPointsTransferSerializer, DealPointUsageSerializer, DealStatsSerializer,
-                                                UserVisitTrackingSerializer, MerchantLoyaltyProgramSerializer, 
-                                                UserLoyaltyRewardSerializer,
-                                                LoyaltyStatsSerializer, VisitTrackingSerializer
+                                                SimpleVisitSerializer, StoreVoucherSerializer, CreateVoucherSerializer,
+                                                UseVoucherSerializer, TrackVisitSerializer
                                             )
 # from trade_time_accounting.notification.FCM_manager import unsubscribe_from_topic
 from freelancing.registrations.serializers import CheckOtp
@@ -1468,38 +1467,33 @@ class DealStatsViewSet(viewsets.ViewSet):
         return Response(serializer.data)
 
 
-# ===== LOYALTY SYSTEM APIs =====
+# ===== SIMPLE VOUCHER SYSTEM APIs =====
 
-class UserVisitTrackingViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for tracking user visits to merchants
-    """
-    serializer_class = UserVisitTrackingSerializer
+class SimpleVisitViewSet(viewsets.ModelViewSet):
+    """Simple visit tracking for voucher system"""
+    serializer_class = SimpleVisitSerializer
     permission_classes = [IsAuthenticated]
-    filter_backends = (DjangoFilterBackend, SearchFilter)
-    filterset_fields = ['merchant', 'visit_type', 'visit_date']
-    search_fields = ['user__fullname', 'merchant__business_name']
     
     def get_queryset(self):
         # Handle Swagger schema generation
         if getattr(self, 'swagger_fake_view', False):
-            return UserVisitTracking.objects.none()
+            return SimpleVisit.objects.none()
         
         user = self.request.user
         if hasattr(user, 'merchant_profile'):
             # Merchant can see visits to their store
-            return UserVisitTracking.objects.filter(merchant=user.merchant_profile)
+            return SimpleVisit.objects.filter(merchant=user.merchant_profile)
         else:
             # User can see their own visits
-            return UserVisitTracking.objects.filter(user=user)
+            return SimpleVisit.objects.filter(user=user)
     
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
     
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], url_path='track-visit')
     def track_visit(self, request):
         """Track a user visit to a merchant"""
-        serializer = VisitTrackingSerializer(data=request.data)
+        serializer = TrackVisitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         merchant_id = serializer.validated_data['merchant_id']
@@ -1510,7 +1504,7 @@ class UserVisitTrackingViewSet(viewsets.ModelViewSet):
         
         # Check if visit already exists for today
         today = timezone.now().date()
-        existing_visit = UserVisitTracking.objects.filter(
+        existing_visit = SimpleVisit.objects.filter(
             user=request.user,
             merchant=merchant,
             visit_date__date=today
@@ -1520,206 +1514,56 @@ class UserVisitTrackingViewSet(viewsets.ModelViewSet):
             return Response({'message': 'Visit already tracked for today'}, status=200)
         
         # Create visit record
-        visit = UserVisitTracking.objects.create(
+        visit = SimpleVisit.objects.create(
             user=request.user,
             merchant=merchant,
-            visit_type=serializer.validated_data['visit_type'],
-            visit_notes=serializer.validated_data.get('visit_notes', ''),
-            location=serializer.validated_data.get('location', '')
+            notes=serializer.validated_data.get('notes', '')
         )
-        
-        # Check for loyalty rewards
-        self._check_loyalty_rewards(request.user, merchant)
         
         return Response({
             'message': 'Visit tracked successfully',
-            'visit': UserVisitTrackingSerializer(visit).data
+            'visit': SimpleVisitSerializer(visit).data
         }, status=201)
-    
-    def _check_loyalty_rewards(self, user, merchant):
-        """Check if user is eligible for loyalty rewards"""
-        try:
-            loyalty_program = merchant.loyalty_program
-            if not loyalty_program.is_active:
-                return
-            
-            # Count visits in the last 30 days
-            thirty_days_ago = timezone.now() - timezone.timedelta(days=30)
-            recent_visits = UserVisitTracking.objects.filter(
-                user=user,
-                merchant=merchant,
-                visit_date__gte=thirty_days_ago
-            ).count()
-            
-            # Check if user has enough visits
-            if recent_visits >= loyalty_program.visits_required:
-                # Check if user already got a reward recently
-                cooldown_date = timezone.now() - timezone.timedelta(days=loyalty_program.cooldown_days)
-                recent_reward = UserLoyaltyReward.objects.filter(
-                    user=user,
-                    merchant=merchant,
-                    create_time__gte=cooldown_date
-                ).exists()
-                
-                if not recent_reward:
-                    self._generate_loyalty_reward(user, merchant, loyalty_program)
-        
-        except MerchantLoyaltyProgram.DoesNotExist:
-            pass
-    
-    def _generate_loyalty_reward(self, user, merchant, loyalty_program):
-        """Generate loyalty reward for user"""
-        expiry_date = timezone.now() + timezone.timedelta(days=loyalty_program.voucher_expiry_days)
-        
-        reward_data = {
-            'user': user,
-            'merchant': merchant,
-            'loyalty_program': loyalty_program,
-            'reward_type': loyalty_program.reward_type,
-            'expiry_date': expiry_date,
-            'status': 'active'
-        }
-        
-        if loyalty_program.reward_type == 'voucher':
-            reward_data.update({
-                'voucher_title': loyalty_program.voucher_title,
-                'voucher_message': loyalty_program.voucher_message,
-                'voucher_value': loyalty_program.voucher_value,
-                'voucher_code': f"LOYALTY_{uuid.uuid4().hex[:8].upper()}"
-            })
-        elif loyalty_program.reward_type == 'points':
-            reward_data['points_amount'] = loyalty_program.points_bonus
-            # Add points to user wallet
-            user.wallet.add_points(
-                loyalty_program.points_bonus,
-                f"Loyalty reward from {merchant.business_name}",
-                f"LOYALTY_{uuid.uuid4().hex[:8].upper()}"
-            )
-        elif loyalty_program.reward_type == 'discount':
-            reward_data.update({
-                'discount_percentage': loyalty_program.discount_percentage,
-                'discount_max_amount': loyalty_program.discount_max_amount
-            })
-        elif loyalty_program.reward_type == 'free_item':
-            reward_data.update({
-                'free_item_name': loyalty_program.free_item_name,
-                'free_item_description': loyalty_program.free_item_description
-            })
-        
-        UserLoyaltyReward.objects.create(**reward_data)
 
 
-class MerchantLoyaltyProgramViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing merchant loyalty programs
-    """
-    serializer_class = MerchantLoyaltyProgramSerializer
+class StoreVoucherViewSet(viewsets.ModelViewSet):
+    """Simple voucher management for stores"""
     permission_classes = [IsAuthenticated]
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return CreateVoucherSerializer
+        return StoreVoucherSerializer
     
     def get_queryset(self):
         # Handle Swagger schema generation
         if getattr(self, 'swagger_fake_view', False):
-            return MerchantLoyaltyProgram.objects.none()
+            return StoreVoucher.objects.none()
         
         user = self.request.user
+        
+        # Merchant can see vouchers they gave
         if hasattr(user, 'merchant_profile'):
-            return MerchantLoyaltyProgram.objects.filter(merchant=user.merchant_profile)
-        return MerchantLoyaltyProgram.objects.none()
+            return StoreVoucher.objects.filter(merchant=user.merchant_profile)
+        
+        # User can see vouchers given to them
+        return StoreVoucher.objects.filter(user=user)
     
     def perform_create(self, serializer):
-        serializer.save(merchant=self.request.user.merchant_profile)
+        # This will be handled in CreateVoucherSerializer
+        pass
     
-    @action(detail=False, methods=['get'])
-    def stats(self, request):
-        """Get loyalty program statistics"""
-        merchant = request.user.merchant_profile
+    @action(detail=False, methods=['post'], url_path='give-voucher')
+    def give_voucher(self, request):
+        """Merchant gives voucher to user"""
+        if not hasattr(request.user, 'merchant_profile'):
+            return Response({'error': 'Only merchants can give vouchers'}, status=403)
         
-        # Calculate statistics
-        total_visits = UserVisitTracking.objects.filter(merchant=merchant).count()
-        total_rewards = UserLoyaltyReward.objects.filter(merchant=merchant).count()
-        active_rewards = UserLoyaltyReward.objects.filter(merchant=merchant, status='active').count()
-        used_rewards = UserLoyaltyReward.objects.filter(merchant=merchant, status='used').count()
-        expired_rewards = UserLoyaltyReward.objects.filter(merchant=merchant, status='expired').count()
+        serializer = CreateVoucherSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
         
-        total_points_given = UserLoyaltyReward.objects.filter(
-            merchant=merchant, reward_type='points'
-        ).aggregate(total=Sum('points_amount'))['total'] or Decimal('0.00')
-        
-        # Average visits per user
-        unique_users = UserVisitTracking.objects.filter(merchant=merchant).values('user').distinct().count()
-        average_visits = total_visits / unique_users if unique_users > 0 else 0
-        
-        # Top visiting users
-        top_users = UserVisitTracking.objects.filter(merchant=merchant).values(
-            'user__fullname', 'user__id'
-        ).annotate(
-            visit_count=Count('id')
-        ).order_by('-visit_count')[:5]
-        
-        data = {
-            'total_visits': total_visits,
-            'total_rewards_given': total_rewards,
-            'active_rewards': active_rewards,
-            'used_rewards': used_rewards,
-            'expired_rewards': expired_rewards,
-            'total_points_given': total_points_given,
-            'average_visits_per_user': average_visits,
-            'top_visiting_users': list(top_users)
-        }
-        
-        serializer = LoyaltyStatsSerializer(data)
-        return Response(serializer.data)
-
-
-class UserLoyaltyRewardViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing user loyalty rewards
-    """
-    serializer_class = UserLoyaltyRewardSerializer
-    permission_classes = [IsAuthenticated]
-    filter_backends = (DjangoFilterBackend, SearchFilter)
-    filterset_fields = ['status', 'reward_type', 'merchant']
-    
-    def get_queryset(self):
-        # Handle Swagger schema generation
-        if getattr(self, 'swagger_fake_view', False):
-            return UserLoyaltyReward.objects.none()
-        
-        user = self.request.user
-        if hasattr(user, 'merchant_profile'):
-            # Merchant can see rewards they gave
-            return UserLoyaltyReward.objects.filter(merchant=user.merchant_profile)
-        else:
-            # User can see their own rewards
-            return UserLoyaltyReward.objects.filter(user=user)
-    
-    @action(detail=True, methods=['post'])
-    def use_reward(self, request, pk=None):
-        """Use a loyalty reward"""
-        reward = self.get_object()
-        
-        if reward.status != 'active':
-            return Response({'error': 'Reward is not active'}, status=400)
-        
-        if reward.is_expired():
-            reward.status = 'expired'
-            reward.save()
-            return Response({'error': 'Reward has expired'}, status=400)
-        
-        # Mark as used
-        reward.mark_used(
-            location=request.data.get('location'),
-            notes=request.data.get('notes')
-        )
-        
-        return Response({'message': 'Reward used successfully'})
-    
-    @action(detail=False, methods=['post'])
-    def give_manual_reward(self, request):
-        """Give manual reward to user (merchant can give anytime)"""
+        # Get user from request data
         user_id = request.data.get('user_id')
-        reward_type = request.data.get('reward_type', 'voucher')
-        
         if not user_id:
             return Response({'error': 'user_id is required'}, status=400)
         
@@ -1728,218 +1572,100 @@ class UserLoyaltyRewardViewSet(viewsets.ModelViewSet):
         except ApplicationUser.DoesNotExist:
             return Response({'error': 'User not found'}, status=404)
         
-        merchant = request.user.merchant_profile
+        # Create voucher
+        voucher = serializer.save(user=user)
         
-        # Get or create loyalty program
+        return Response({
+            'message': 'Voucher given successfully',
+            'voucher': StoreVoucherSerializer(voucher).data
+        }, status=201)
+    
+    @action(detail=False, methods=['post'], url_path='use-voucher')
+    def use_voucher(self, request):
+        """User uses voucher at store"""
+        serializer = UseVoucherSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        voucher_code = serializer.validated_data['voucher_code']
+        amount = serializer.validated_data['amount']
+        notes = serializer.validated_data.get('notes', '')
+        
         try:
-            loyalty_program = merchant.loyalty_program
-        except MerchantLoyaltyProgram.DoesNotExist:
-            # Create default loyalty program
-            loyalty_program = MerchantLoyaltyProgram.objects.create(
-                merchant=merchant,
-                is_active=True,
-                visits_required=0,  # No visit requirement for manual rewards
-                reward_type=reward_type,
-                auto_generate_rewards=False  # Manual rewards only
+            voucher = StoreVoucher.objects.get(
+                voucher_code=voucher_code,
+                user=request.user,
+                status='active'
             )
+        except StoreVoucher.DoesNotExist:
+            return Response({'error': 'Voucher not found or already used'}, status=404)
         
-        # Generate reward
-        expiry_date = timezone.now() + timezone.timedelta(days=30)
+        # Use voucher
+        discount, message = voucher.use_voucher(amount, notes)
         
-        reward_data = {
-            'user': user,
-            'merchant': merchant,
-            'loyalty_program': loyalty_program,
-            'reward_type': reward_type,
-            'expiry_date': expiry_date,
-            'status': 'active'
+        if discount is None:
+            return Response({'error': message}, status=400)
+        
+        return Response({
+            'message': message,
+            'discount_amount': discount,
+            'final_amount': amount - discount,
+            'voucher': StoreVoucherSerializer(voucher).data
+        })
+    
+    @action(detail=True, methods=['post'], url_path='cancel-voucher')
+    def cancel_voucher(self, request, pk=None):
+        """Merchant cancels voucher"""
+        if not hasattr(request.user, 'merchant_profile'):
+            return Response({'error': 'Only merchants can cancel vouchers'}, status=403)
+        
+        voucher = self.get_object()
+        
+        if voucher.merchant != request.user.merchant_profile:
+            return Response({'error': 'You can only cancel your own vouchers'}, status=403)
+        
+        if voucher.status != 'active':
+            return Response({'error': 'Only active vouchers can be cancelled'}, status=400)
+        
+        voucher.status = 'cancelled'
+        voucher.save()
+        
+        return Response({'message': 'Voucher cancelled successfully'})
+    
+    @action(detail=False, methods=['get'], url_path='my-vouchers')
+    def my_vouchers(self, request):
+        """Get user's vouchers"""
+        vouchers = self.get_queryset()
+        
+        # Filter by status if provided
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            vouchers = vouchers.filter(status=status_filter)
+        
+        # Filter by merchant if provided
+        merchant_id = request.query_params.get('merchant_id')
+        if merchant_id:
+            vouchers = vouchers.filter(merchant_id=merchant_id)
+        
+        serializer = self.get_serializer(vouchers, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], url_path='voucher-stats')
+    def voucher_stats(self, request):
+        """Get voucher statistics"""
+        if not hasattr(request.user, 'merchant_profile'):
+            return Response({'error': 'Only merchants can view stats'}, status=403)
+        
+        merchant = request.user.merchant_profile
+        vouchers = StoreVoucher.objects.filter(merchant=merchant)
+        
+        stats = {
+            'total_vouchers': vouchers.count(),
+            'active_vouchers': vouchers.filter(status='active').count(),
+            'used_vouchers': vouchers.filter(status='used').count(),
+            'expired_vouchers': vouchers.filter(status='expired').count(),
+            'cancelled_vouchers': vouchers.filter(status='cancelled').count(),
         }
         
-        if reward_type == 'voucher':
-            reward_data.update({
-                'voucher_title': request.data.get('voucher_title', 'Special Gift Voucher'),
-                'voucher_message': request.data.get('voucher_message', 'Thank you for being a valued customer!'),
-                'voucher_value': request.data.get('voucher_value', 50.00),
-                'voucher_code': f"MANUAL_{uuid.uuid4().hex[:8].upper()}"
-            })
-        elif reward_type == 'points':
-            points_amount = request.data.get('points_amount', 100.00)
-            reward_data['points_amount'] = points_amount
-            # Add points to user wallet
-            user.wallet.add_points(
-                points_amount,
-                f"Manual reward from {merchant.business_name}",
-                f"MANUAL_{uuid.uuid4().hex[:8].upper()}"
-            )
-        elif reward_type == 'discount':
-            reward_data.update({
-                'discount_percentage': request.data.get('discount_percentage', 10.00),
-                'discount_max_amount': request.data.get('discount_max_amount', 500.00)
-            })
-        elif reward_type == 'free_item':
-            reward_data.update({
-                'free_item_name': request.data.get('free_item_name', 'Free Item'),
-                'free_item_description': request.data.get('free_item_description', 'Special free item for you!')
-            })
-        
-        reward = UserLoyaltyReward.objects.create(**reward_data)
-        
-        return Response({
-            'message': 'Manual reward given successfully',
-            'reward': UserLoyaltyRewardSerializer(reward).data
-        }, status=201)
-
-
-class ComprehensiveHistoryViewSet(viewsets.ViewSet):
-    """
-    Comprehensive history tracking for points and rewards
-    """
-    permission_classes = [IsAuthenticated]
-    
-    @action(detail=False, methods=['get'])
-    def point_history(self, request):
-        """Get comprehensive point history for user/merchant"""
-        user = request.user
-        
-        # Get wallet history
-        wallet_history = WalletHistory.objects.filter(wallet__user=user).order_by('-create_time')
-        
-        # Get deal point usage (if merchant)
-        deal_usage = []
-        if hasattr(user, 'merchant_profile'):
-            deal_usage = DealPointUsage.objects.filter(
-                Q(from_merchant=user.merchant_profile) | Q(to_merchant=user.merchant_profile)
-            ).order_by('-create_time')
-        
-        # Get loyalty rewards
-        loyalty_rewards = UserLoyaltyReward.objects.filter(user=user).order_by('-create_time')
-        
-        # Get Razorpay transactions
-        razorpay_transactions = RazorpayTransaction.objects.filter(user=user).order_by('-create_time')
-        
-        # Serialize data
-        wallet_serializer = WalletHistorySerializer(wallet_history, many=True)
-        deal_serializer = DealPointUsageSerializer(deal_usage, many=True, context={'request': request})
-        reward_serializer = UserLoyaltyRewardSerializer(loyalty_rewards, many=True, context={'request': request})
-        razorpay_serializer = RazorpayTransactionSerializer(razorpay_transactions, many=True, context={'request': request})
-        
-        return Response({
-            'wallet_history': wallet_serializer.data,
-            'deal_usage': deal_serializer.data,
-            'loyalty_rewards': reward_serializer.data,
-            'razorpay_transactions': razorpay_serializer.data
-        })
-    
-    @action(detail=False, methods=['get'])
-    def merchant_point_flow(self, request):
-        """Get merchant point flow - who gave points to whom"""
-        user = request.user
-        if not hasattr(user, 'merchant_profile'):
-            return Response({'error': 'Merchant profile not found'}, status=404)
-        
-        merchant = user.merchant_profile
-        
-        # Points sent by this merchant
-        points_sent = DealPointUsage.objects.filter(
-            from_merchant=merchant
-        ).order_by('-create_time')
-        
-        # Points received by this merchant
-        points_received = DealPointUsage.objects.filter(
-            to_merchant=merchant
-        ).order_by('-create_time')
-        
-        # Points transfers
-        transfers_sent = MerchantPointsTransfer.objects.filter(
-            from_merchant=merchant
-        ).order_by('-create_time')
-        
-        transfers_received = MerchantPointsTransfer.objects.filter(
-            to_merchant=merchant
-        ).order_by('-create_time')
-        
-        # Serialize data
-        sent_serializer = DealPointUsageSerializer(points_sent, many=True, context={'request': request})
-        received_serializer = DealPointUsageSerializer(points_received, many=True, context={'request': request})
-        transfers_sent_serializer = MerchantPointsTransferSerializer(transfers_sent, many=True, context={'request': request})
-        transfers_received_serializer = MerchantPointsTransferSerializer(transfers_received, many=True, context={'request': request})
-        
-        return Response({
-            'points_sent': sent_serializer.data,
-            'points_received': received_serializer.data,
-            'transfers_sent': transfers_sent_serializer.data,
-            'transfers_received': transfers_received_serializer.data
-        })
-    
-    @action(detail=False, methods=['get'])
-    def reward_usage_history(self, request):
-        """Get detailed reward usage history"""
-        user = request.user
-        
-        # All loyalty rewards
-        all_rewards = UserLoyaltyReward.objects.filter(user=user).order_by('-create_time')
-        
-        # Used rewards
-        used_rewards = all_rewards.filter(status='used')
-        
-        # Active rewards
-        active_rewards = all_rewards.filter(status='active')
-        
-        # Expired rewards
-        expired_rewards = all_rewards.filter(status='expired')
-        
-        # Serialize data
-        all_serializer = UserLoyaltyRewardSerializer(all_rewards, many=True, context={'request': request})
-        used_serializer = UserLoyaltyRewardSerializer(used_rewards, many=True, context={'request': request})
-        active_serializer = UserLoyaltyRewardSerializer(active_rewards, many=True, context={'request': request})
-        expired_serializer = UserLoyaltyRewardSerializer(expired_rewards, many=True, context={'request': request})
-        
-        return Response({
-            'all_rewards': all_serializer.data,
-            'used_rewards': used_serializer.data,
-            'active_rewards': active_serializer.data,
-            'expired_rewards': expired_serializer.data,
-            'summary': {
-                'total_rewards': all_rewards.count(),
-                'used_count': used_rewards.count(),
-                'active_count': active_rewards.count(),
-                'expired_count': expired_rewards.count()
-            }
-        })
-    
-    @action(detail=False, methods=['get'])
-    def merchant_reward_given(self, request):
-        """Get rewards given by merchant to users"""
-        user = request.user
-        if not hasattr(user, 'merchant_profile'):
-            return Response({'error': 'Merchant profile not found'}, status=404)
-        
-        merchant = user.merchant_profile
-        
-        # Rewards given by this merchant
-        rewards_given = UserLoyaltyReward.objects.filter(
-            merchant=merchant
-        ).order_by('-create_time')
-        
-        # Group by status
-        by_status = {}
-        for status_choice in UserLoyaltyReward.REWARD_STATUS:
-            status_rewards = rewards_given.filter(status=status_choice[0])
-            by_status[status_choice[0]] = UserLoyaltyRewardSerializer(
-                status_rewards, many=True, context={'request': request}
-            ).data
-        
-        # Serialize all data
-        all_serializer = UserLoyaltyRewardSerializer(rewards_given, many=True, context={'request': request})
-        
-        return Response({
-            'all_rewards_given': all_serializer.data,
-            'by_status': by_status,
-            'summary': {
-                'total_given': rewards_given.count(),
-                'by_status_count': {status: len(data) for status, data in by_status.items()}
-            }
-        })
-
+        return Response(stats)
 
 

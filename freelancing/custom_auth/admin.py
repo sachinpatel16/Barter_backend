@@ -5,10 +5,12 @@ from django.urls import reverse
 from django.utils.safestring import mark_safe
 from django.db.models.functions import TruncDate
 
-from freelancing.custom_auth.models import (ApplicationUser, MultiToken,
-                                            UserActivity, CustomPermission,
-                                            MerchantProfile, Wallet, Category, WalletHistory, SiteSetting, RazorpayTransaction,
-                                            MerchantDeal, MerchantDealRequest, MerchantDealConfirmation, MerchantNotification, MerchantPointsTransfer, DealPointUsage)
+from freelancing.custom_auth.models import (
+    ApplicationUser, MultiToken, CustomBlacklistedToken, UserActivity, CustomPermission,
+    MerchantProfile, Wallet, Category, WalletHistory, SiteSetting, RazorpayTransaction,
+    MerchantDeal, MerchantDealRequest, MerchantDealConfirmation, MerchantNotification, 
+    MerchantPointsTransfer, DealPointUsage, LoginOtp, StudentOTP, SimpleVisit, StoreVoucher
+)
 from freelancing.voucher.models import Voucher
 
 # Custom Admin Site Configuration
@@ -385,7 +387,8 @@ class UserAdmin(UserAdmin):
     is_online.boolean = True
     is_online.admin_order_field = "is_online"
 
-# Merchant Deal System Admin
+# ===== MERCHANT DEAL SYSTEM =====
+
 @admin.register(MerchantDeal)
 class MerchantDealAdmin(admin.ModelAdmin):
     list_display = ['title', 'merchant', 'points_offered', 'points_used', 'points_remaining', 'deal_value', 'status', 'create_time']
@@ -402,7 +405,7 @@ class MerchantDealAdmin(admin.ModelAdmin):
             'fields': ('points_offered', 'points_used', 'points_remaining', 'deal_value')
         }),
         ('Preferences', {
-            'fields': ('preferred_cities', 'preferred_categories', 'terms_conditions', 'is_negotiable')
+            'fields': ('preferred_cities', 'preferred_categories', 'terms_conditions')
         }),
         ('Status & Timing', {
             'fields': ('status', 'expiry_date', 'create_time', 'update_time')
@@ -413,7 +416,7 @@ class MerchantDealAdmin(admin.ModelAdmin):
 @admin.register(MerchantDealRequest)
 class MerchantDealRequestAdmin(admin.ModelAdmin):
     list_display = ['requesting_merchant', 'deal', 'status', 'points_requested', 'request_time']
-    list_filter = ['status']
+    list_filter = ['status', 'request_time']
     search_fields = ['requesting_merchant__business_name', 'deal__title']
     readonly_fields = ['request_time']
     ordering = ['-request_time']
@@ -423,7 +426,7 @@ class MerchantDealRequestAdmin(admin.ModelAdmin):
             'fields': ('requesting_merchant', 'deal', 'status')
         }),
         ('Request Details', {
-            'fields': ('points_requested', 'counter_offer', 'message')
+            'fields': ('points_requested', 'message')
         }),
         ('Timing', {
             'fields': ('request_time',)
@@ -483,6 +486,26 @@ class MerchantNotificationAdmin(admin.ModelAdmin):
     search_fields = ['merchant__business_name', 'title', 'message']
     readonly_fields = ['create_time', 'read_time']
     list_editable = ['is_read']
+    ordering = ['-create_time']
+    
+    fieldsets = (
+        ('Notification Information', {
+            'fields': ('merchant', 'notification_type', 'title', 'message')
+        }),
+        ('Related Objects', {
+            'fields': ('deal', 'confirmation')
+        }),
+        ('Status', {
+            'fields': ('is_read', 'read_time')
+        }),
+        ('Action Data', {
+            'fields': ('action_url', 'action_data'),
+            'classes': ('collapse',)
+        }),
+        ('Timing', {
+            'fields': ('create_time',)
+        }),
+    )
 
 
 @admin.register(MerchantPointsTransfer)
@@ -506,3 +529,146 @@ class MerchantPointsTransferAdmin(admin.ModelAdmin):
             'fields': ('notes', 'create_time')
         }),
     )
+
+
+# ===== AUTHENTICATION & USER MANAGEMENT =====
+
+@admin.register(CustomBlacklistedToken)
+class CustomBlacklistedTokenAdmin(admin.ModelAdmin):
+    list_display = ['token', 'blacklisted_at']
+    list_filter = ['blacklisted_at']
+    search_fields = ['token']
+    readonly_fields = ['blacklisted_at']
+    ordering = ['-blacklisted_at']
+
+
+@admin.register(UserActivity)
+class UserActivityAdmin(admin.ModelAdmin):
+    list_display = ['user', 'last_activity']
+    list_filter = ['last_activity']
+    search_fields = ['user__email', 'user__fullname']
+    readonly_fields = ['last_activity']
+    ordering = ['-last_activity']
+
+
+@admin.register(CustomPermission)
+class CustomPermissionAdmin(admin.ModelAdmin):
+    list_display = ['name', 'is_read_access', 'is_create_access', 'is_update_access', 'is_delete_access', 'is_printed_access']
+    list_filter = ['is_read_access', 'is_create_access', 'is_update_access', 'is_delete_access', 'is_printed_access']
+    search_fields = ['name']
+    list_editable = ['is_read_access', 'is_create_access', 'is_update_access', 'is_delete_access', 'is_printed_access']
+
+
+# ===== OTP MANAGEMENT =====
+
+@admin.register(LoginOtp)
+class LoginOtpAdmin(admin.ModelAdmin):
+    list_display = ['user_mobile', 'otp', 'expiration_time', 'is_active']
+    list_filter = ['is_active', 'expiration_time']
+    search_fields = ['user_mobile']
+    readonly_fields = ['expiration_time']
+    ordering = ['-expiration_time']
+
+
+@admin.register(StudentOTP)
+class StudentOTPAdmin(admin.ModelAdmin):
+    list_display = ['email', 'otp', 'expiration_time', 'is_verified', 'is_active']
+    list_filter = ['is_verified', 'is_active', 'expiration_time']
+    search_fields = ['email']
+    readonly_fields = ['expiration_time']
+    ordering = ['-expiration_time']
+
+
+# ===== SIMPLE VOUCHER SYSTEM =====
+
+@admin.register(SimpleVisit)
+class SimpleVisitAdmin(admin.ModelAdmin):
+    list_display = ['user', 'merchant', 'visit_date', 'notes_preview', 'is_active']
+    list_filter = ['visit_date', 'is_active', 'merchant__category', 'merchant__city']
+    search_fields = ['user__email', 'user__fullname', 'merchant__business_name', 'notes']
+    readonly_fields = ['visit_date']
+    ordering = ['-visit_date']
+    actions = ['activate_visits', 'deactivate_visits']
+    
+    fieldsets = (
+        ('Visit Information', {
+            'fields': ('user', 'merchant', 'visit_date')
+        }),
+        ('Notes', {
+            'fields': ('notes',)
+        }),
+        ('Status', {
+            'fields': ('is_active', 'is_delete')
+        }),
+    )
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('user', 'merchant')
+    
+    def notes_preview(self, obj):
+        if obj.notes:
+            return obj.notes[:50] + '...' if len(obj.notes) > 50 else obj.notes
+        return "No notes"
+    notes_preview.short_description = 'Notes Preview'
+    
+    def activate_visits(self, request, queryset):
+        updated = queryset.update(is_active=True)
+        self.message_user(request, f"Successfully activated {updated} visits.")
+    activate_visits.short_description = "Activate selected visits"
+    
+    def deactivate_visits(self, request, queryset):
+        updated = queryset.update(is_active=False)
+        self.message_user(request, f"Successfully deactivated {updated} visits.")
+    deactivate_visits.short_description = "Deactivate selected visits"
+
+
+@admin.register(StoreVoucher)
+class StoreVoucherAdmin(admin.ModelAdmin):
+    list_display = ['voucher_code', 'title', 'merchant', 'user', 'discount_type', 'discount_value', 'status', 'expiry_date', 'used_at', 'is_expired_display']
+    list_filter = ['status', 'discount_type', 'expiry_date', 'used_at', 'merchant__category', 'is_active']
+    search_fields = ['voucher_code', 'title', 'merchant__business_name', 'user__email', 'user__fullname']
+    readonly_fields = ['voucher_code', 'used_at', 'used_amount', 'create_time', 'is_expired_display']
+    list_editable = ['status']
+    ordering = ['-create_time']
+    actions = ['activate_vouchers', 'deactivate_vouchers', 'mark_as_expired']
+    
+    fieldsets = (
+        ('Voucher Information', {
+            'fields': ('voucher_code', 'title', 'description', 'merchant', 'user')
+        }),
+        ('Discount Details', {
+            'fields': ('discount_type', 'discount_value', 'max_discount_amount')
+        }),
+        ('Usage Information', {
+            'fields': ('status', 'expiry_date', 'used_at', 'used_amount', 'usage_notes', 'is_expired_display')
+        }),
+        ('Merchant Notes', {
+            'fields': ('merchant_notes',)
+        }),
+        ('Status', {
+            'fields': ('is_active', 'is_delete', 'create_time')
+        }),
+    )
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('merchant', 'user')
+    
+    def is_expired_display(self, obj):
+        return obj.is_expired()
+    is_expired_display.boolean = True
+    is_expired_display.short_description = 'Is Expired'
+    
+    def activate_vouchers(self, request, queryset):
+        updated = queryset.update(status='active')
+        self.message_user(request, f"Successfully activated {updated} vouchers.")
+    activate_vouchers.short_description = "Activate selected vouchers"
+    
+    def deactivate_vouchers(self, request, queryset):
+        updated = queryset.update(status='cancelled')
+        self.message_user(request, f"Successfully deactivated {updated} vouchers.")
+    deactivate_vouchers.short_description = "Deactivate selected vouchers"
+    
+    def mark_as_expired(self, request, queryset):
+        updated = queryset.update(status='expired')
+        self.message_user(request, f"Successfully marked {updated} vouchers as expired.")
+    mark_as_expired.short_description = "Mark selected vouchers as expired"

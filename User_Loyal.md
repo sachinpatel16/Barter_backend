@@ -1,58 +1,50 @@
-# User Loyalty System API Documentation
+# Simple Voucher System API Documentation
 
 ## 📋 Overview
 
-The User Loyalty System provides comprehensive functionality for merchant-to-user loyalty programs. This system tracks user visits, automatically generates rewards, and manages reward expiry and usage.
+The Simple Voucher System provides basic functionality for merchant-to-user voucher management. This system tracks user visits and allows merchants to give store-specific vouchers that users can use at the same store.
 
 ## ✨ Key Features
 
-- **Visit Tracking**: Track user visits to merchants (physical, online, purchase, redemption)
-- **Automatic Rewards**: Generate gift vouchers, points, discounts, or free items based on visit frequency
-- **Manual Rewards**: Merchants can give instant rewards without visit requirements
-- **Expiry Management**: Automatic expiry tracking for rewards
-- **Cooldown Periods**: Prevent spam rewards with configurable cooldown periods
-- **Point Integration**: Seamless integration with wallet point system
+- **Simple Visit Tracking**: Track user visits to merchants
+- **Store-Specific Vouchers**: Merchants can give vouchers to users for their store only
+- **Voucher Management**: Create, use, and track vouchers
+- **Expiry Management**: Automatic expiry tracking for vouchers
+- **Basic Analytics**: Simple statistics for merchants
 
 ## 🏗️ System Architecture
 
 ### Models
 
-#### UserVisitTracking
+#### SimpleVisit
 
-Tracks user visits to merchants for loyalty program calculations.
+Tracks user visits to merchants for basic analytics.
 
 **Fields:**
 
 - `user`: Foreign key to ApplicationUser
 - `merchant`: Foreign key to MerchantProfile
 - `visit_date`: Date and time of visit
-- `visit_type`: Type of visit (physical, online, purchase, redemption)
-- `visit_notes`: Additional notes about the visit
-- `location`: Specific location details
+- `notes`: Optional merchant notes about the visit
 
-#### MerchantLoyaltyProgram
+#### StoreVoucher
 
-Merchant loyalty program configuration.
+Simple voucher model for store-specific vouchers.
 
 **Fields:**
 
-- `merchant`: One-to-one relationship with MerchantProfile
-- `is_active`: Whether the program is active
-- `visits_required`: Number of visits required for reward
-- `reward_type`: Type of reward (voucher, points, discount, free_item)
-- `cooldown_days`: Days to wait before next reward
-
-#### UserLoyaltyReward
-
-Tracks loyalty rewards given to users.
-
-**Fields:**
-
+- `voucher_code`: Unique voucher code
+- `title`: Voucher title
+- `description`: Voucher description
+- `merchant`: Foreign key to MerchantProfile (store-specific)
 - `user`: Foreign key to ApplicationUser
-- `merchant`: Foreign key to MerchantProfile
-- `reward_type`: Type of reward given
-- `status`: Reward status (pending, active, used, expired, cancelled)
-- `expiry_date`: When the reward expires
+- `discount_type`: Percentage or fixed amount
+- `discount_value`: Discount value
+- `max_discount_amount`: Maximum discount for percentage vouchers
+- `status`: Voucher status (active, used, expired, cancelled)
+- `expiry_date`: When the voucher expires
+- `used_at`: When the voucher was used
+- `used_amount`: Amount of discount applied
 
 ## 🚀 API Endpoints
 
@@ -61,10 +53,10 @@ Tracks loyalty rewards given to users.
 #### Track User Visit
 
 ```http
-POST /api/custom_auth/v1/visit-tracking/track-visit/
+POST /api/custom_auth/v1/simple-visits/track-visit/
 ```
 
-**Description:** Track a user's visit to a merchant and check for loyalty rewards.
+**Description:** Track a user's visit to a merchant.
 
 **Authentication:** Required (JWT Token)
 
@@ -75,34 +67,14 @@ Authorization: Bearer <jwt_token>
 Content-Type: application/json
 ```
 
-**Location Examples:**
-
-- `"Store Location - Ground Floor"`
-- `"Main Branch - Mumbai"`
-- `"Outlet 1 - Delhi"`
-- `"Online Store"`
-- `"Mobile App"`
-- `"Drive-through"`
-- `"Pickup Counter"`
-- `"Home Delivery"`
-
 **Request Body:**
 
 ```json
 {
   "merchant_id": 1,
-  "visit_type": "physical",
-  "visit_notes": "Customer came for lunch",
-  "location": "Store Location - Ground Floor"
+  "notes": "Customer came for lunch"
 }
 ```
-
-**Visit Types:**
-
-- `physical`: In-store visit
-- `online`: Website/app visit
-- `purchase`: Purchase made
-- `redemption`: Voucher redeemed
 
 **Response:**
 
@@ -116,15 +88,8 @@ Content-Type: application/json
     "merchant": 1,
     "merchant_name": "Pizza Palace",
     "visit_date": "2024-01-01T10:00:00Z",
-    "visit_type": "physical",
-    "visit_notes": "Customer came for lunch",
-    "location": "Store Location - Ground Floor"
-  },
-  "loyalty_status": {
-    "visits_count": 3,
-    "visits_required": 3,
-    "eligible_for_reward": true,
-    "reward_generated": true
+    "notes": "Customer came for lunch",
+    "create_time": "2024-01-01T10:00:00Z"
   }
 }
 ```
@@ -132,7 +97,7 @@ Content-Type: application/json
 #### Get Visit History
 
 ```http
-GET /api/custom_auth/v1/visit-tracking/
+GET /api/custom_auth/v1/simple-visits/
 ```
 
 **Description:** Get user's visit history or merchant's visitor history.
@@ -142,8 +107,6 @@ GET /api/custom_auth/v1/visit-tracking/
 **Query Parameters:**
 
 - `merchant`: Filter by merchant ID
-- `visit_type`: Filter by visit type (physical, online, purchase, redemption)
-- `visit_date`: Filter by date
 - `page`: Page number for pagination
 - `page_size`: Number of results per page
 
@@ -152,7 +115,7 @@ GET /api/custom_auth/v1/visit-tracking/
 ```json
 {
   "count": 25,
-  "next": "http://api.example.com/visit-tracking/?page=2",
+  "next": "http://api.example.com/simple-visits/?page=2",
   "previous": null,
   "results": [
     {
@@ -162,23 +125,22 @@ GET /api/custom_auth/v1/visit-tracking/
       "merchant": 1,
       "merchant_name": "Pizza Palace",
       "visit_date": "2024-01-01T10:00:00Z",
-      "visit_type": "physical",
-      "visit_notes": "Customer came for lunch",
-      "location": "Store Location - Ground Floor"
+      "notes": "Customer came for lunch",
+      "create_time": "2024-01-01T10:00:00Z"
     }
   ]
 }
 ```
 
-### 🎯 Loyalty Programs
+### 🎫 Voucher Management
 
-#### Create Loyalty Program
+#### Give Voucher to User
 
 ```http
-POST /api/custom_auth/v1/loyalty-programs/
+POST /api/custom_auth/v1/store-vouchers/give-voucher/
 ```
 
-**Description:** Create a loyalty program for a merchant.
+**Description:** Merchant gives a voucher to a user for their store.
 
 **Authentication:** Required (JWT Token - Merchant only)
 
@@ -186,91 +148,103 @@ POST /api/custom_auth/v1/loyalty-programs/
 
 ```json
 {
-  "is_active": true,
-  "visits_required": 3,
-  "reward_type": "voucher",
-  "voucher_title": "Welcome Back Voucher",
-  "voucher_message": "Thank you for your loyalty!",
-  "voucher_value": 50.0,
-  "voucher_expiry_days": 30,
-  "cooldown_days": 7
+  "user_id": 1,
+  "title": "Welcome Back Voucher",
+  "description": "Special discount for our loyal customer",
+  "discount_type": "percentage",
+  "discount_value": 15.0,
+  "max_discount_amount": 200.0,
+  "expiry_date": "2024-02-15T23:59:59Z",
+  "merchant_notes": "First time visitor bonus"
 }
 ```
 
-**Reward Types:**
+**Discount Types:**
 
-- `voucher`: Gift voucher reward
-- `points`: Points added to wallet
-- `discount`: Discount percentage
-- `free_item`: Free item reward
+- `percentage`: Percentage discount
+- `fixed`: Fixed amount discount
 
 **Response:**
 
 ```json
 {
-  "id": 1,
-  "merchant": 1,
-  "merchant_name": "Pizza Palace",
-  "is_active": true,
-  "visits_required": 3,
-  "reward_type": "voucher",
-  "voucher_title": "Welcome Back Voucher",
-  "voucher_value": 50.0,
-  "voucher_expiry_days": 30,
-  "cooldown_days": 7,
-  "create_time": "2024-01-01T10:00:00Z"
-}
-```
-
-#### Get Loyalty Program Stats
-
-```http
-GET /api/custom_auth/v1/loyalty-programs/stats/
-```
-
-**Description:** Get loyalty program statistics for the merchant.
-
-**Authentication:** Required (JWT Token - Merchant only)
-
-**Response:**
-
-```json
-{
-  "total_visits": 150,
-  "total_rewards_given": 25,
-  "active_rewards": 15,
-  "used_rewards": 8,
-  "expired_rewards": 2,
-  "total_points_given": 2500.0,
-  "average_visits_per_user": 3.2,
-  "top_visiting_users": [
-    { "user__fullname": "John Doe", "visit_count": 12 },
-    { "user__fullname": "Jane Smith", "visit_count": 8 }
-  ],
-  "recent_activity": {
-    "visits_last_30_days": 45,
-    "rewards_given_last_30_days": 8
+  "message": "Voucher given successfully",
+  "voucher": {
+    "id": 1,
+    "voucher_code": "VOUCHER_A1B2C3D4",
+    "title": "Welcome Back Voucher",
+    "description": "Special discount for our loyal customer",
+    "merchant": 1,
+    "merchant_name": "Pizza Palace",
+    "user": 1,
+    "user_name": "John Doe",
+    "discount_type": "percentage",
+    "discount_value": 15.0,
+    "max_discount_amount": 200.0,
+    "status": "active",
+    "expiry_date": "2024-02-15T23:59:59Z",
+    "is_expired": false,
+    "can_use": true,
+    "create_time": "2024-01-01T10:00:00Z"
   }
 }
 ```
 
-### 🎁 Loyalty Rewards
-
-#### Get User Rewards
+#### Use Voucher
 
 ```http
-GET /api/custom_auth/v1/loyalty-rewards/
+POST /api/custom_auth/v1/store-vouchers/use-voucher/
 ```
 
-**Description:** Get user's loyalty rewards or merchant's given rewards.
+**Description:** User uses a voucher at the store.
+
+**Authentication:** Required (JWT Token)
+
+**Request Body:**
+
+```json
+{
+  "voucher_code": "VOUCHER_A1B2C3D4",
+  "amount": 1000.0,
+  "notes": "Used for dinner order"
+}
+```
+
+**Response:**
+
+```json
+{
+  "message": "Voucher used successfully",
+  "discount_amount": 150.0,
+  "final_amount": 850.0,
+  "voucher": {
+    "id": 1,
+    "voucher_code": "VOUCHER_A1B2C3D4",
+    "title": "Welcome Back Voucher",
+    "status": "used",
+    "used_at": "2024-01-15T19:30:00Z",
+    "used_amount": 150.0,
+    "usage_notes": "Used for dinner order",
+    "is_expired": false,
+    "can_use": false
+  }
+}
+```
+
+#### Get User's Vouchers
+
+```http
+GET /api/custom_auth/v1/store-vouchers/my-vouchers/
+```
+
+**Description:** Get user's vouchers or merchant's given vouchers.
 
 **Authentication:** Required (JWT Token)
 
 **Query Parameters:**
 
-- `status`: Filter by reward status (pending, active, used, expired, cancelled)
-- `reward_type`: Filter by reward type (voucher, points, discount, free_item)
-- `merchant`: Filter by merchant
+- `status`: Filter by voucher status (active, used, expired, cancelled)
+- `merchant_id`: Filter by merchant ID
 - `page`: Page number for pagination
 - `page_size`: Number of results per page
 
@@ -284,205 +258,113 @@ GET /api/custom_auth/v1/loyalty-rewards/
   "results": [
     {
       "id": 1,
-      "user": 1,
-      "user_name": "John Doe",
+      "voucher_code": "VOUCHER_A1B2C3D4",
+      "title": "Welcome Back Voucher",
+      "description": "Special discount for our loyal customer",
       "merchant": 1,
       "merchant_name": "Pizza Palace",
-      "reward_type": "voucher",
+      "user": 1,
+      "user_name": "John Doe",
+      "discount_type": "percentage",
+      "discount_value": 15.0,
+      "max_discount_amount": 200.0,
       "status": "active",
-      "voucher_title": "Welcome Back Voucher",
-      "voucher_value": 50.0,
-      "voucher_code": "LOYALTY_ABC123",
-      "expiry_date": "2024-02-01T10:00:00Z",
+      "expiry_date": "2024-02-15T23:59:59Z",
       "is_expired": false,
+      "can_use": true,
       "create_time": "2024-01-01T10:00:00Z"
     }
   ]
 }
 ```
 
-#### Use Reward
+#### Cancel Voucher
 
 ```http
-POST /api/custom_auth/v1/loyalty-rewards/{id}/use/
+POST /api/custom_auth/v1/store-vouchers/{id}/cancel-voucher/
 ```
 
-**Description:** Mark a loyalty reward as used.
-
-**Authentication:** Required (JWT Token)
-
-**Request Body:**
-
-```json
-{
-  "location": "Store Location",
-  "notes": "Used during lunch visit"
-}
-```
-
-**Response:**
-
-```json
-{
-  "message": "Reward used successfully",
-  "reward": {
-    "id": 1,
-    "status": "used",
-    "used_at": "2024-01-15T14:30:00Z",
-    "usage_location": "Store Location",
-    "usage_notes": "Used during lunch visit"
-  }
-}
-```
-
-#### Give Manual Reward
-
-```http
-POST /api/custom_auth/v1/loyalty-rewards/give-manual/
-```
-
-**Description:** Give manual reward to user (merchant can give anytime without visit requirements).
+**Description:** Merchant cancels a voucher.
 
 **Authentication:** Required (JWT Token - Merchant only)
 
-**Request Body:**
+**Response:**
 
 ```json
 {
-  "user_id": 1,
-  "reward_type": "voucher",
-  "voucher_title": "Special Gift Voucher",
-  "voucher_message": "Thank you for being a valued customer!",
-  "voucher_value": 100.0
+  "message": "Voucher cancelled successfully"
 }
 ```
+
+#### Get Voucher Statistics
+
+```http
+GET /api/custom_auth/v1/store-vouchers/voucher-stats/
+```
+
+**Description:** Get voucher statistics for the merchant.
+
+**Authentication:** Required (JWT Token - Merchant only)
 
 **Response:**
 
 ```json
 {
-  "message": "Manual reward given successfully",
-  "reward": {
-    "id": 1,
-    "user": 1,
-    "user_name": "John Doe",
-    "merchant": 1,
-    "merchant_name": "Pizza Palace",
-    "reward_type": "voucher",
-    "status": "active",
-    "voucher_title": "Special Gift Voucher",
-    "voucher_value": 100.0,
-    "voucher_code": "MANUAL_ABC12345",
-    "expiry_date": "2024-02-15T10:00:00Z"
-  }
-}
-```
-
-**Manual Reward Types:**
-
-1. **Voucher Reward:**
-
-```json
-{
-  "user_id": 1,
-  "reward_type": "voucher",
-  "voucher_title": "Special Gift Voucher",
-  "voucher_message": "Thank you for being a valued customer!",
-  "voucher_value": 100.0
-}
-```
-
-2. **Points Reward:**
-
-```json
-{
-  "user_id": 1,
-  "reward_type": "points",
-  "points_amount": 500.0
-}
-```
-
-3. **Discount Reward:**
-
-```json
-{
-  "user_id": 1,
-  "reward_type": "discount",
-  "discount_percentage": 15.0,
-  "discount_max_amount": 1000.0
-}
-```
-
-4. **Free Item Reward:**
-
-```json
-{
-  "user_id": 1,
-  "reward_type": "free_item",
-  "free_item_name": "Free Pizza",
-  "free_item_description": "Get a free medium pizza with any order!"
+  "total_vouchers": 50,
+  "active_vouchers": 30,
+  "used_vouchers": 15,
+  "expired_vouchers": 3,
+  "cancelled_vouchers": 2
 }
 ```
 
 ## 🔄 Business Logic
 
-### Loyalty Reward Generation
+### Simple Voucher Flow
 
-#### Automatic Rewards (Based on Visits)
+#### User to Merchant Flow
 
-1. **Visit Tracking**: When a user visits a merchant, the system tracks the visit
-2. **Visit Counting**: System counts visits in the last 30 days
-3. **Reward Eligibility**: If visits >= required visits, user becomes eligible
-4. **Cooldown Check**: System checks if user got reward recently (cooldown period)
-5. **Reward Generation**: If eligible and not in cooldown, reward is generated
-6. **Automatic Points**: For point rewards, points are automatically added to wallet
-7. **Wallet Integration**: Points are deducted from merchant's wallet when giving rewards
-
-#### Manual Rewards (Merchant Can Give Anytime)
-
-1. **No Visit Requirement**: Merchant can give rewards without any visit requirements
-2. **Instant Reward**: Reward is created immediately when merchant gives it
-3. **Custom Values**: Merchant can set custom voucher values, points, discounts
-4. **Flexible Timing**: Can be given anytime, no cooldown restrictions
-5. **Direct Points**: Points are added directly to user's wallet
-6. **Wallet Deduction**: Points are deducted from merchant's wallet
-
-### Point Usage Flow
-
-#### Merchant-to-User Flow
-
-```
-Merchant Wallet → Points Deducted → User Reward Created → User Uses at Same Merchant
-```
+1. **User Visits Store** → `POST /simple-visits/track-visit/`
+2. **Merchant Gives Voucher** → `POST /store-vouchers/give-voucher/`
+3. **User Uses Voucher** → `POST /store-vouchers/use-voucher/`
 
 #### Key Points:
 
-- Points are deducted from merchant's wallet when giving rewards
-- User can only use rewards at the merchant who gave them
-- All transactions are tracked in WalletHistory
-- Reward expiry is automatically managed
+- Vouchers are store-specific (can only be used at the merchant who gave them)
+- No complex loyalty programs or auto-generation
+- Simple visit tracking for basic analytics
+- Vouchers have expiry dates and status tracking
+- Merchants can cancel active vouchers
+
+### Voucher Status Flow
+
+```
+Active → Used (when user uses voucher)
+Active → Expired (when expiry date passes)
+Active → Cancelled (when merchant cancels)
+```
 
 ## 💼 Use Cases
 
 ### For Merchants
 
-1. **Loyalty Program Setup**:
+1. **Visit Tracking**:
 
-   - Configure visit requirements (e.g., 3 visits = reward)
-   - Set reward types (voucher, points, discount, free item)
-   - Configure expiry and cooldown periods
-   - Monitor program performance
+   - Track customer visits to their store
+   - View visitor history and patterns
+   - Basic analytics on customer engagement
 
-2. **Customer Engagement**:
+2. **Voucher Management**:
 
-   - Track customer visit patterns
-   - Give manual rewards for special occasions
-   - Monitor reward usage and effectiveness
+   - Give vouchers to customers
+   - Track voucher usage and effectiveness
+   - Cancel vouchers if needed
+   - View voucher statistics
 
-3. **Analytics & Insights**:
-   - View detailed statistics
-   - Track top visiting customers
-   - Analyze loyalty program success
+3. **Customer Engagement**:
+   - Give vouchers to encourage repeat visits
+   - Track which customers use vouchers
+   - Monitor voucher redemption rates
 
 ### For Users
 
@@ -490,13 +372,13 @@ Merchant Wallet → Points Deducted → User Reward Created → User Uses at Sam
 
    - Check in at merchant locations
    - Track visit history across merchants
-   - Monitor reward eligibility status
+   - Simple visit logging
 
-2. **Reward Management**:
-   - View available rewards
-   - Use rewards at merchant locations
-   - Track reward expiry dates
-   - Receive automatic rewards
+2. **Voucher Management**:
+   - View available vouchers
+   - Use vouchers at merchant locations
+   - Track voucher expiry dates
+   - See voucher usage history
 
 ## ⚠️ Error Handling
 
@@ -506,7 +388,7 @@ Merchant Wallet → Points Deducted → User Reward Created → User Uses at Sam
 
 ```json
 {
-  "error": "Reward has expired",
+  "error": "Voucher cannot be used",
   "status": 400
 }
 ```
@@ -524,7 +406,7 @@ Merchant Wallet → Points Deducted → User Reward Created → User Uses at Sam
 
 ```json
 {
-  "error": "Merchant access required",
+  "error": "Only merchants can give vouchers",
   "status": 403
 }
 ```
@@ -550,28 +432,33 @@ Merchant Wallet → Points Deducted → User Reward Created → User Uses at Sam
 ## 🔒 Security Considerations
 
 1. **Authentication**: All endpoints require JWT token authentication
-2. **Authorization**: Users can only access their own data, merchants can only manage their programs
-3. **Rate Limiting**: Visit tracking has built-in cooldown periods
+2. **Authorization**: Users can only access their own data, merchants can only manage their vouchers
+3. **Store-Specific**: Vouchers can only be used at the merchant who gave them
 4. **Data Validation**: All input data is validated and sanitized
-5. **Point Security**: Wallet operations are atomic and secure
-6. **Audit Trail**: All transactions are logged for security
+5. **Audit Trail**: All transactions are logged for security
 
 ## 📊 Integration Points
 
-### Wallet System Integration
+### Simple Analytics
 
-- Points are deducted from merchant wallet when giving rewards
-- User wallet receives points for point-type rewards
-- All transactions are tracked in WalletHistory
+- Basic visit tracking for merchants
+- Voucher usage statistics
+- Simple customer engagement metrics
 
-### Voucher System Integration
+### Voucher System
 
-- Loyalty vouchers integrate with main voucher system
-- Vouchers can be redeemed at merchant locations
-- Expiry management is handled automatically
+- Store-specific vouchers only
+- Expiry management
+- Status tracking (active, used, expired, cancelled)
 
-### Notification System
+## 🎯 Summary
 
-- Automatic notifications for reward generation
-- Email/SMS notifications for reward expiry
-- Merchant notifications for program statistics
+This simplified voucher system provides:
+
+- **Basic visit tracking** for analytics
+- **Store-specific vouchers** that can only be used at the giving merchant
+- **Simple voucher management** (create, use, cancel, track)
+- **No complex loyalty programs** or auto-generation
+- **Clean, focused functionality** for merchant-user interactions
+
+The system is designed to be simple, easy to use, and focused on the core need: merchants giving vouchers to users for their specific store.
