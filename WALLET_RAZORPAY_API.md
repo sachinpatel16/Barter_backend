@@ -72,7 +72,40 @@ Verifies the Razorpay payment and adds points to the user's wallet.
 }
 ```
 
-### 3. List Razorpay Transactions
+### 3. Cancel Razorpay Order
+
+**POST** `/api/custom_auth/v1/wallet/razorpay/cancel-order/`
+
+Cancels a pending Razorpay order.
+
+**Request Body:**
+
+```json
+{
+  "razorpay_order_id": "order_ABC123",
+  "reason": "User changed mind"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "transaction_id": 1,
+    "order_id": "order_ABC123",
+    "status": "cancelled",
+    "cancelled_at": "2024-01-01T12:00:00Z",
+    "reason": "User changed mind",
+    "razorpay_cancelled": true,
+    "time_elapsed_minutes": 15.5,
+    "message": "Order cancelled successfully"
+  }
+}
+```
+
+### 4. List Razorpay Transactions
 
 **GET** `/api/custom_auth/v1/wallet/razorpay/transactions/`
 
@@ -115,7 +148,7 @@ Lists all Razorpay transactions for the authenticated user.
 }
 ```
 
-### 4. Get Wallet Balance
+### 5. Get Wallet Balance
 
 **GET** `/api/custom_auth/v1/wallet/`
 
@@ -134,7 +167,7 @@ Get the current wallet balance (points).
 }
 ```
 
-### 5. Get Wallet History
+### 6. Get Wallet History
 
 **GET** `/api/custom_auth/v1/wallet/history/`
 
@@ -190,9 +223,10 @@ RAZORPAY_KEY_SECRET=your_razorpay_key_secret
 
 1. Frontend calls `/create-order/` with amount
 2. Frontend receives order_id and initiates Razorpay payment
-3. After successful payment, frontend calls `/verify-payment/` with payment details
-4. Points are automatically added to user's wallet
-5. Frontend can check wallet balance using `/wallet/` endpoint
+3. **Optional**: If user wants to cancel, frontend calls `/cancel-order/` with order_id
+4. After successful payment, frontend calls `/verify-payment/` with payment details
+5. Points are automatically added to user's wallet
+6. Frontend can check wallet balance using `/wallet/` endpoint
 
 ## Error Handling
 

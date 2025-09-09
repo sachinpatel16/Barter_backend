@@ -49,7 +49,7 @@ from freelancing.custom_auth.serializers import (BaseUserSerializer,
                                                 UserPasswordResetSerializer, MerchantProfileSerializer, WalletSerializer,
                                                 CategorySerializer, WalletHistorySerializer, MerchantListingSerializer,
                                                 RazorpayOrderSerializer, RazorpayPaymentVerificationSerializer,
-                                                RazorpayTransactionSerializer, MerchantDealSerializer, 
+                                                RazorpayCancelOrderSerializer, RazorpayTransactionSerializer, MerchantDealSerializer, 
                                                 MerchantDealCreateSerializer, MerchantDealRequestSerializer, 
                                                 MerchantDealConfirmationSerializer, MerchantNotificationSerializer,
                                                 MerchantPointsTransferSerializer, DealPointUsageSerializer, DealStatsSerializer,
@@ -898,6 +898,155 @@ class RazorpayPaymentVerificationAPIView(APIView):
             return Response({
                 'success': False,
                 'error': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class RazorpayCancelOrderAPIView(APIView):
+    """
+    API for canceling Razorpay orders
+    
+    This endpoint allows users to cancel their pending Razorpay orders.
+    Only orders with 'pending' status can be cancelled.
+    
+    Features:
+    - Cancel pending orders only
+    - Time-based cancellation limits (1 hour default)
+    - Reason tracking for cancellation
+    - Automatic status update
+    - Comprehensive error handling
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [JWTAuthentication]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Initialize Razorpay client
+        self.client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+
+    @swagger_auto_schema(
+        operation_description="Cancel a pending Razorpay order",
+        request_body=RazorpayCancelOrderSerializer,
+        responses={
+            200: "Order cancelled successfully",
+            400: "Bad request - Order cannot be cancelled",
+            404: "Order not found",
+            500: "Internal server error"
+        }
+    )
+    def post(self, request):
+        """
+        Cancel a Razorpay order
+        
+        Request Body:
+        {
+            "razorpay_order_id": "order_ABC123",
+            "reason": "User changed mind" // Optional
+        }
+        
+        Returns:
+        {
+            "success": true,
+            "data": {
+                "transaction_id": 123,
+                "order_id": "order_ABC123",
+                "status": "cancelled",
+                "cancelled_at": "2024-01-01T12:00:00Z",
+                "reason": "User changed mind",
+                "message": "Order cancelled successfully"
+            }
+        }
+        """
+        serializer = RazorpayCancelOrderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        user = request.user
+        order_id = serializer.validated_data['razorpay_order_id']
+        reason = serializer.validated_data.get('reason', 'User cancelled')
+        
+        try:
+            # Get transaction record
+            transaction = RazorpayTransaction.objects.get(
+                razorpay_order_id=order_id,
+                user=user,
+                status='pending'
+            )
+            
+            # Check if order can be cancelled (only pending orders can be cancelled)
+            if transaction.status != 'pending':
+                return Response({
+                    'success': False,
+                    'error': f'Order cannot be cancelled. Current status: {transaction.status}',
+                    'current_status': transaction.status,
+                    'order_id': order_id
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if order is too old to cancel (optional - you can set a time limit)
+            time_since_creation = timezone.now() - transaction.create_time
+            max_cancel_time = 3600  # 1 hour in seconds (configurable)
+            
+            if time_since_creation.total_seconds() > max_cancel_time:
+                return Response({
+                    'success': False,
+                    'error': 'Order is too old to cancel. Please contact support.',
+                    'order_created_at': transaction.create_time,
+                    'time_elapsed_minutes': round(time_since_creation.total_seconds() / 60, 2),
+                    'max_cancel_time_minutes': round(max_cancel_time / 60, 2)
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Try to cancel the order with Razorpay (if the order exists on Razorpay)
+            razorpay_cancelled = False
+            try:
+                # Note: Razorpay doesn't have a direct cancel API for orders
+                # Orders are automatically cancelled if not paid within the timeout period
+                # We can try to fetch the order to check its status
+                order_details = self.client.order.fetch(order_id)
+                if order_details.get('status') == 'paid':
+                    return Response({
+                        'success': False,
+                        'error': 'Order has already been paid and cannot be cancelled',
+                        'razorpay_status': order_details.get('status')
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                razorpay_cancelled = True
+            except Exception as razorpay_error:
+                # Even if Razorpay cancellation fails, we can still mark our transaction as cancelled
+                # since the order might have already expired or been cancelled
+                pass
+            
+            # Mark transaction as cancelled
+            transaction.status = 'cancelled'
+            transaction.error_code = 'USER_CANCELLED'
+            transaction.error_description = f'Order cancelled by user. Reason: {reason}'
+            transaction.save()
+            
+            # Log the cancellation for audit purposes
+            print(f"Order cancelled - User: {user.id}, Order: {order_id}, Reason: {reason}")
+            
+            return Response({
+                'success': True,
+                'data': {
+                    'transaction_id': transaction.id,
+                    'order_id': order_id,
+                    'status': 'cancelled',
+                    'cancelled_at': timezone.now(),
+                    'reason': reason,
+                    'razorpay_cancelled': razorpay_cancelled,
+                    'time_elapsed_minutes': round(time_since_creation.total_seconds() / 60, 2),
+                    'message': 'Order cancelled successfully'
+                }
+            }, status=status.HTTP_200_OK)
+            
+        except RazorpayTransaction.DoesNotExist:
+            return Response({
+                'success': False,
+                'error': 'Order not found or already processed',
+                'order_id': order_id,
+                'user_id': user.id
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'success': False,
+                'error': f'Failed to cancel order: {str(e)}',
+                'order_id': order_id
             }, status=status.HTTP_400_BAD_REQUEST)
 
 

@@ -37,6 +37,7 @@ urlpatterns = [
     # Razorpay Wallet APIs
     path("v1/wallet/razorpay/create-order/", api.RazorpayWalletAPIView.as_view(), name="razorpay-create-order"),
     path("v1/wallet/razorpay/verify-payment/", api.RazorpayPaymentVerificationAPIView.as_view(), name="razorpay-verify-payment"),
+    path("v1/wallet/razorpay/cancel-order/", api.RazorpayCancelOrderAPIView.as_view(), name="razorpay-cancel-order"),
     path("v1/wallet/razorpay/transactions/", api.RazorpayTransactionListView.as_view(), name="razorpay-transactions"),
     
     # Merchant Deal System URLs

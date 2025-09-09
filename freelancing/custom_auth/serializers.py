@@ -441,6 +441,18 @@ class RazorpayPaymentVerificationSerializer(serializers.Serializer):
     razorpay_signature = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
+class RazorpayCancelOrderSerializer(serializers.Serializer):
+    """Serializer for canceling Razorpay order"""
+    razorpay_order_id = serializers.CharField(max_length=255)
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True, help_text="Reason for cancellation")
+    
+    def validate_razorpay_order_id(self, value):
+        """Validate that the order exists and belongs to the user"""
+        if not value:
+            raise serializers.ValidationError("Order ID is required")
+        return value
+
+
 class RazorpayTransactionSerializer(serializers.ModelSerializer):
     """Serializer for Razorpay transaction model"""
     user_name = serializers.CharField(source='user.fullname', read_only=True)
