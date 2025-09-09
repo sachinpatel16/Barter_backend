@@ -178,6 +178,8 @@ class VoucherViewSet(viewsets.ModelViewSet):
                 "top_performing_vouchers": [{
                     "id": v.id,
                     "title": v.title,
+                    "image": v.image.url if v.image else None,
+                    "display_image": v.get_display_image().url if v.get_display_image() else None,
                     "purchase_count": v.purchase_count,
                     "redemption_count": v.redemption_count,
                     "popularity_score": v.purchase_count * 2 + v.redemption_count
@@ -286,7 +288,7 @@ class VoucherViewSet(viewsets.ModelViewSet):
             "shares_created": [
                 {
                     "phone_number": "+919876543210",
-                    "claim_reference": "GFT-12345678",
+                    "claim_reference": "GFT-123456",
                     "share_id": 1
                 }
             ]
@@ -1240,6 +1242,8 @@ class UserVoucherViewSet(viewsets.ReadOnlyModelViewSet):
                     "title": redemption.voucher.title,
                     "voucher_type": redemption.voucher.voucher_type.name,
                     "voucher_value": self._get_voucher_value(redemption.voucher),
+                    "image": self._get_voucher_image_url(redemption.voucher),
+                    "display_image": self._get_voucher_display_image_url(redemption.voucher),
                     "purchased_at": redemption.purchased_at,
                     "expiry_date": redemption.expiry_date,
                     "remaining_redemptions": redemption.get_remaining_redemptions()
@@ -1286,6 +1290,32 @@ class UserVoucherViewSet(viewsets.ReadOnlyModelViewSet):
                 return "Special offer"
         except Exception:
             return "Special offer"
+
+    def _get_voucher_image_url(self, voucher):
+        """Helper method to get voucher image URL"""
+        try:
+            if voucher and hasattr(voucher, 'image') and voucher.image:
+                request = getattr(self, 'request', None)
+                if request:
+                    return request.build_absolute_uri(voucher.image.url)
+                return voucher.image.url
+            return None
+        except Exception:
+            return None
+
+    def _get_voucher_display_image_url(self, voucher):
+        """Helper method to get voucher display image URL"""
+        try:
+            if voucher:
+                image = voucher.get_display_image()
+                if image:
+                    request = getattr(self, 'request', None)
+                    if request:
+                        return request.build_absolute_uri(image.url)
+                    return image.url
+            return None
+        except Exception:
+            return None
 
     def _get_merchant_logo_url(self, merchant):
         """Helper method to get merchant logo URL"""
@@ -1385,52 +1415,96 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
                     {"error": "No contacts provided"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            # Clear existing contacts for this user
-            WhatsAppContact.objects.filter(user=request.user).delete()
-           
-            # Extract phone numbers for bulk validation
+            
+            # Get existing contacts for this user to avoid duplicates
+            existing_contacts = WhatsAppContact.objects.filter(user=request.user)
+            existing_phone_numbers = set()
+            existing_contact_map = {}
+            
+            for contact in existing_contacts:
+                # Normalize phone numbers for comparison
+                normalized_phone = self._normalize_phone_for_comparison(contact.phone_number)
+                existing_phone_numbers.add(normalized_phone)
+                existing_contact_map[normalized_phone] = contact
+            
+            # Extract phone numbers for bulk validation (only new ones)
             phone_numbers = []
             contact_map = {}
+            new_contacts = []
+            skipped_contacts = []
             
             for contact in contacts_data:
                 name = contact.get('name', '')
                 phone_number = contact.get('phone_number', '')
                
                 if phone_number:
-                    # Clean phone number (remove + if present)
-                    clean_phone = phone_number.replace('+', '') if phone_number else ''
+                    # Format phone number for RapidAPI (+91 format)
+                    formatted_phone = self._format_phone_for_rapidapi(phone_number)
+                    normalized_phone = self._normalize_phone_for_comparison(phone_number)
                     
-                    # Basic phone number validation (should be at least 10 digits)
-                    if len(clean_phone) >= 10:
-                        phone_numbers.append(clean_phone)
-                        contact_map[clean_phone] = {
-                            'name': name,
-                            'original_phone': phone_number
-                        }
+                    if formatted_phone:
+                        # Check if this phone number already exists for this user
+                        if normalized_phone in existing_phone_numbers:
+                            # Skip existing contact
+                            existing_contact = existing_contact_map[normalized_phone]
+                            skipped_contacts.append({
+                                'name': name,
+                                'phone_number': phone_number,
+                                'existing_name': existing_contact.name,
+                                'existing_phone': existing_contact.phone_number,
+                                'is_on_whatsapp': existing_contact.is_on_whatsapp
+                            })
+                            print(f"Skipping existing contact: {phone_number} (existing: {existing_contact.phone_number})")
+                        else:
+                            # New contact - add to validation list
+                            phone_numbers.append(formatted_phone)
+                            contact_map[formatted_phone] = {
+                                'name': name,
+                                'original_phone': phone_number
+                            }
+                            new_contacts.append({
+                                'name': name,
+                                'phone_number': phone_number
+                            })
             
+            # If no new contacts, return existing ones
             if not phone_numbers:
-                return Response(
-                    {"error": "No valid phone numbers found"},
-                    status=status.HTTP_400_BAD_REQUEST
+                whatsapp_contacts = WhatsAppContact.objects.filter(
+                    user=request.user,
+                    is_on_whatsapp=True
                 )
+                serializer = self.get_serializer(whatsapp_contacts, many=True)
+                
+                return Response({
+                    "message": f"No new contacts to add. {len(skipped_contacts)} contacts already exist.",
+                    "whatsapp_contacts": serializer.data,
+                    "validation_summary": {
+                        "new_contacts": 0,
+                        "skipped_contacts": len(skipped_contacts),
+                        "total_whatsapp_contacts": len(whatsapp_contacts),
+                        "skipped_details": skipped_contacts
+                    }
+                })
             
             # Bulk check WhatsApp status using RapidAPI (handles chunking automatically)
+            print(f"Starting WhatsApp validation for {len(phone_numbers)} new phone numbers")
             whatsapp_status_map = self.check_whatsapp_status_bulk(phone_numbers)
+            print(f"WhatsApp validation completed. Results: {len(whatsapp_status_map)} numbers processed")
            
             # Create new contacts with WhatsApp status
             created_contacts = []
-            for clean_phone, contact_info in contact_map.items():
-                is_on_whatsapp = whatsapp_status_map.get(clean_phone, False)
+            for formatted_phone, contact_info in contact_map.items():
+                is_on_whatsapp = whatsapp_status_map.get(formatted_phone, False)
                 
                 contact_obj = WhatsAppContact.objects.create(
                     user=request.user,
                     name=contact_info['name'],
-                    phone_number=contact_info['original_phone'],
+                    phone_number=contact_info['original_phone'],  # Store original format
                     is_on_whatsapp=is_on_whatsapp
                 )
                 created_contacts.append(contact_obj)
            
-            # Return only WhatsApp contacts
+            # Return all WhatsApp contacts (existing + new)
             whatsapp_contacts = WhatsAppContact.objects.filter(
                 user=request.user,
                 is_on_whatsapp=True
@@ -1439,13 +1513,14 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(whatsapp_contacts, many=True)
            
             return Response({
-                "message": f"Synced {len(created_contacts)} contacts, {len(whatsapp_contacts)} on WhatsApp",
+                "message": f"Added {len(created_contacts)} new contacts, skipped {len(skipped_contacts)} existing contacts. Total WhatsApp contacts: {len(whatsapp_contacts)}",
                 "whatsapp_contacts": serializer.data,
                 "validation_summary": {
-                    "total_contacts": len(created_contacts),
-                    "whatsapp_contacts": len(whatsapp_contacts),
-                    "non_whatsapp_contacts": len(created_contacts) - len(whatsapp_contacts),
-                    "chunks_processed": (len(phone_numbers) + 9) // 10  # Calculate number of chunks
+                    "new_contacts_added": len(created_contacts),
+                    "existing_contacts_skipped": len(skipped_contacts),
+                    "total_whatsapp_contacts": len(whatsapp_contacts),
+                    "chunks_processed": (len(phone_numbers) + 9) // 10,  # Calculate number of chunks
+                    "skipped_details": skipped_contacts
                 }
             })
            
@@ -1455,43 +1530,120 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    def _normalize_phone_for_comparison(self, phone_number):
+        """
+        Normalize phone number for comparison (removes formatting differences).
+        
+        Args:
+            phone_number (str): Phone number in any format
+            
+        Returns:
+            str: Normalized phone number for comparison, or None if invalid
+        """
+        try:
+            if not phone_number:
+                return None
+            
+            # Clean phone number (remove spaces, dashes, parentheses, +)
+            clean_phone = str(phone_number).strip().replace(' ', '').replace('-', '').replace('(', '').replace(')', '').replace('+', '')
+            
+            # Handle different Indian phone number formats
+            if clean_phone.startswith('91') and len(clean_phone) == 12:
+                # Already has country code, return last 10 digits
+                return clean_phone[2:]
+            elif clean_phone.startswith('0') and len(clean_phone) == 11:
+                # Remove leading 0
+                return clean_phone[1:]
+            elif len(clean_phone) == 10 and clean_phone.isdigit():
+                # 10 digit number
+                return clean_phone
+            elif len(clean_phone) == 11 and clean_phone.isdigit():
+                # 11 digit number, might be with country code but without +
+                if clean_phone.startswith('91'):
+                    return clean_phone[2:]
+                else:
+                    return clean_phone[1:]
+            
+            # If none of the above patterns match, return None
+            return None
+            
+        except Exception as e:
+            print(f"Error normalizing phone number {phone_number}: {str(e)}")
+            return None
+
+    def _format_phone_for_rapidapi(self, phone_number):
+        """
+        Format phone number for RapidAPI (+91 format).
+        
+        Args:
+            phone_number (str): Phone number in various formats
+            
+        Returns:
+            str: Formatted phone number with +91 prefix, or None if invalid
+        """
+        try:
+            if not phone_number:
+                return None
+            
+            # Clean phone number (remove spaces, dashes, parentheses)
+            clean_phone = str(phone_number).strip().replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+            
+            # Remove + if present
+            if clean_phone.startswith('+'):
+                clean_phone = clean_phone[1:]
+            
+            # Handle different Indian phone number formats
+            if clean_phone.startswith('91') and len(clean_phone) == 12:
+                # Already has country code, format as +91XXXXXXXXXX
+                return f"+{clean_phone}"
+            elif clean_phone.startswith('0') and len(clean_phone) == 11:
+                # Remove leading 0 and add country code
+                clean_phone = clean_phone[1:]
+                if len(clean_phone) == 10:
+                    return f"+91{clean_phone}"
+            elif len(clean_phone) == 10 and clean_phone.isdigit():
+                # 10 digit number, add country code
+                return f"+91{clean_phone}"
+            elif len(clean_phone) == 11 and clean_phone.isdigit():
+                # 11 digit number, might be with country code but without +
+                if clean_phone.startswith('91'):
+                    return f"+{clean_phone}"
+                else:
+                    return f"+91{clean_phone[1:]}"
+            
+            # If none of the above patterns match, return None
+            print(f"Invalid phone number format: {phone_number} -> {clean_phone}")
+            return None
+            
+        except Exception as e:
+            print(f"Error formatting phone number {phone_number}: {str(e)}")
+            return None
+
     def check_whatsapp_status(self, phone_number):
         """Check if a phone number is registered on WhatsApp using RapidAPI"""
         try:
-            # Clean phone number (remove + if present)
-            clean_phone = phone_number.replace('+', '') if phone_number else ''
+            # Format phone number for RapidAPI (+91 format)
+            formatted_phone = self._format_phone_for_rapidapi(phone_number)
             
-            if not clean_phone:
+            if not formatted_phone:
                 print(f"Invalid phone number: {phone_number}")
                 return False
             
-            # Basic phone number validation (should be at least 10 digits)
-            if len(clean_phone) < 10:
-                print(f"Phone number too short: {clean_phone}")
-                return False
-            
-            # For now, let's assume all valid phone numbers have WhatsApp
-            # This is a temporary fix until we get the RapidAPI working properly
-            print(f"Valid phone number {clean_phone} - assuming has WhatsApp (temporary fix)")
-            return True
-            
-            # TODO: Uncomment below code when RapidAPI is working properly
-            """
             url = "https://whatsapp-number-validator3.p.rapidapi.com/WhatsappNumberHasItWithToken"
             
-            payload = {"phone_number": clean_phone}
+            payload = {"phone_number": formatted_phone}
             headers = {
                 "x-rapidapi-key": "bd54de3881msh517848c79ec25b6p10c042jsnb1179d9521b2",
                 "x-rapidapi-host": "whatsapp-number-validator3.p.rapidapi.com",
                 "Content-Type": "application/json"
             }
             
-            print(f"Checking WhatsApp status for: {clean_phone}")
-            response = requests.post(url, json=payload, headers=headers)
+            print(f"Checking WhatsApp status for: {formatted_phone}")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
             
             if response.status_code == 200:
                 result = response.json()
-                print(f"RapidAPI Response for {clean_phone}: {result}")
+                print(f"RapidAPI Response for {formatted_phone}: {result}")
                 
                 # Check if the API response indicates the number has WhatsApp
                 if isinstance(result, dict):
@@ -1501,17 +1653,25 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
                     whatsapp_status = result.get('whatsapp_status', False)
                     valid = result.get('valid', False)
                     
-                    is_whatsapp = has_whatsapp or is_valid or 'success' in status or 'true' in status or whatsapp_status or valid
-                    print(f"WhatsApp check result for {clean_phone}: {is_whatsapp}")
+                    # More comprehensive check for WhatsApp status
+                    is_whatsapp = (
+                        has_whatsapp or 
+                        is_valid or 
+                        'success' in status or 
+                        'valid' in status or
+                        'true' in status or 
+                        whatsapp_status or 
+                        valid
+                    )
+                    print(f"WhatsApp check result for {formatted_phone}: {is_whatsapp} (has_whatsapp={has_whatsapp}, is_valid={is_valid}, status={status})")
                     return is_whatsapp
                 else:
                     is_whatsapp = bool(result)
-                    print(f"WhatsApp check result for {clean_phone}: {is_whatsapp}")
+                    print(f"WhatsApp check result for {formatted_phone}: {is_whatsapp}")
                     return is_whatsapp
             else:
-                print(f"WhatsApp validation API error for {clean_phone}: {response.status_code} - {response.text}")
+                print(f"WhatsApp validation API error for {formatted_phone}: {response.status_code} - {response.text}")
                 return False
-            """
                 
         except Exception as e:
             print(f"WhatsApp validation error for {phone_number}: {str(e)}")
@@ -1571,15 +1731,29 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
         try:
             url = "https://whatsapp-number-validator3.p.rapidapi.com/WhatsappNumberHasItBulkWithToken"
             
-            payload = {"phone_numbers": phone_numbers_chunk}
+            # Format phone numbers for RapidAPI (+91 format)
+            formatted_phones = []
+            phone_mapping = {}  # Map formatted phone back to original
+            
+            for phone in phone_numbers_chunk:
+                formatted_phone = self._format_phone_for_rapidapi(phone)
+                if formatted_phone:
+                    formatted_phones.append(formatted_phone)
+                    phone_mapping[formatted_phone] = phone
+            
+            if not formatted_phones:
+                print(f"No valid phone numbers in chunk: {phone_numbers_chunk}")
+                return {}
+            
+            payload = {"phone_numbers": formatted_phones}
             headers = {
                 "x-rapidapi-key": "bd54de3881msh517848c79ec25b6p10c042jsnb1179d9521b2",
                 "x-rapidapi-host": "whatsapp-number-validator3.p.rapidapi.com",
                 "Content-Type": "application/json"
             }
             
-            print(f"Making API call for chunk: {phone_numbers_chunk}")
-            response = requests.post(url, json=payload, headers=headers)
+            print(f"Making API call for chunk: {formatted_phones}")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
             
             if response.status_code == 200:
                 result = response.json()
@@ -1588,14 +1762,17 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
                 # Parse the response and create status map
                 status_map = {}
                 for item in result:
-                    phone_number = item.get('phone_number', '')
+                    formatted_phone = item.get('phone_number', '')
                     status = item.get('status', '').lower()
                     
                     # Consider 'valid' status as having WhatsApp
                     is_whatsapp = status == 'valid'
-                    status_map[phone_number] = is_whatsapp
                     
-                    print(f"Phone {phone_number}: status={status}, has_whatsapp={is_whatsapp}")
+                    # Map back to original phone number
+                    original_phone = phone_mapping.get(formatted_phone, formatted_phone)
+                    status_map[original_phone] = is_whatsapp
+                    
+                    print(f"Phone {formatted_phone} (original: {original_phone}): status={status}, has_whatsapp={is_whatsapp}")
                 
                 return status_map
             else:
@@ -1626,6 +1803,27 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    @action(detail=False, methods=["post"], url_path="clear-contacts")
+    def clear_contacts(self, request):
+        """Clear all WhatsApp contacts for the current user"""
+        try:
+            # Get count before deletion
+            contact_count = WhatsAppContact.objects.filter(user=request.user).count()
+            
+            # Delete all contacts for this user
+            WhatsAppContact.objects.filter(user=request.user).delete()
+            
+            return Response({
+                "message": f"Cleared {contact_count} contacts successfully",
+                "deleted_count": contact_count
+            })
+            
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to clear contacts: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     @action(detail=False, methods=["post"], url_path="test-whatsapp-validation")
     def test_whatsapp_validation(self, request):
         """Test WhatsApp validation for a single phone number"""
@@ -1637,13 +1835,22 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            # Format phone number for display
+            formatted_phone = self._format_phone_for_rapidapi(phone_number)
+            if not formatted_phone:
+                return Response(
+                    {"error": "Invalid phone number format"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
             # Test the validation
             is_whatsapp = self.check_whatsapp_status(phone_number)
             
             return Response({
-                "phone_number": phone_number,
+                "original_phone": phone_number,
+                "formatted_phone": formatted_phone,
                 "is_on_whatsapp": is_whatsapp,
-                "message": f"Phone number {phone_number} {'has' if is_whatsapp else 'does not have'} WhatsApp"
+                "message": f"Phone number {formatted_phone} {'has' if is_whatsapp else 'does not have'} WhatsApp"
             })
             
         except Exception as e:
@@ -1959,6 +2166,44 @@ class AdvertisementViewSet(viewsets.ModelViewSet):
     #             status=status.HTTP_500_INTERNAL_SERVER_ERROR
     #         )
 
+    @action(detail=False, methods=["get"], url_path="advertised-vouchers")
+    def advertised_vouchers(self, request):
+        """
+        Get list of voucher IDs that have advertisements for the authenticated merchant.
+        
+        This endpoint returns a simple list of voucher IDs that have active advertisements
+        created by the current merchant. This is useful for frontend to know which
+        vouchers are already being advertised.
+        
+        Returns:
+            Response: JSON containing list of voucher IDs with advertisements
+            
+        Example Response:
+        {
+            "vouchers": [123, 456, 789],
+            "total_count": 3,
+            "message": "Vouchers with advertisements retrieved successfully"
+        }
+        """
+        try:
+            # Get all advertisements for the current merchant
+            merchant_advertisements = self.get_queryset()
+            
+            # Extract voucher IDs from advertisements
+            voucher_ids = list(merchant_advertisements.values_list('voucher_id', flat=True))
+            
+            return Response({
+                "vouchers": voucher_ids,
+                "total_count": len(voucher_ids),
+                "message": "Vouchers with advertisements retrieved successfully"
+            })
+            
+        except Exception as e:
+            return Response(
+                {"error": "Failed to fetch advertised vouchers"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     def perform_destroy(self, instance):
         """Handle advertisement deletion - no refund for deleted advertisements"""
         try:
@@ -2156,7 +2401,7 @@ class MerchantVoucherScanViewSet(viewsets.ViewSet):
         
         Request Body:
             {
-                "qr_data": "VCH-12345678" or "GFT-12345678" or "456" (redemption_id)
+                "qr_data": "VCH-123456" or "GFT-123456" or "456" (redemption_id)
             }
             
         Returns:
@@ -2370,6 +2615,8 @@ class MerchantVoucherScanViewSet(viewsets.ViewSet):
                     "title": getattr(redemption.voucher, 'title', 'Unknown Voucher'),
                     "voucher_type": getattr(redemption.voucher.voucher_type, 'name', 'Unknown Type') if hasattr(redemption.voucher, 'voucher_type') and redemption.voucher.voucher_type else 'Unknown Type',
                     "voucher_value": self._get_voucher_value(redemption.voucher),
+                    "image": self._get_voucher_image_url(redemption.voucher),
+                    "display_image": self._get_voucher_display_image_url(redemption.voucher),
                     "user_info": user_info,
                     "purchased_at": redemption.purchased_at,
                     "expiry_date": redemption.expiry_date,
@@ -2569,6 +2816,32 @@ class MerchantVoucherScanViewSet(viewsets.ViewSet):
         except Exception:
             return "Special offer"
 
+    def _get_voucher_image_url(self, voucher):
+        """Helper method to get voucher image URL"""
+        try:
+            if voucher and hasattr(voucher, 'image') and voucher.image:
+                request = getattr(self, 'request', None)
+                if request:
+                    return request.build_absolute_uri(voucher.image.url)
+                return voucher.image.url
+            return None
+        except Exception:
+            return None
+
+    def _get_voucher_display_image_url(self, voucher):
+        """Helper method to get voucher display image URL"""
+        try:
+            if voucher:
+                image = voucher.get_display_image()
+                if image:
+                    request = getattr(self, 'request', None)
+                    if request:
+                        return request.build_absolute_uri(image.url)
+                    return image.url
+            return None
+        except Exception:
+            return None
+
 class GiftCardClaimViewSet(viewsets.ViewSet):
     """
     Gift Card Claiming and Management API
@@ -2595,7 +2868,7 @@ class GiftCardClaimViewSet(viewsets.ViewSet):
         
         Request Body:
             {
-                "claim_reference": "GFT-12345678"
+                "claim_reference": "GFT-123456"
             }
             
         Returns:

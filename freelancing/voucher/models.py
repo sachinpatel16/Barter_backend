@@ -384,7 +384,7 @@ class GiftCardShare(BaseModel):
         # Generate unique claim reference if not provided
         if not self.claim_reference:
             import uuid
-            self.claim_reference = f"GFT-{uuid.uuid4().hex[:8].upper()}"
+            self.claim_reference = f"GFT-{uuid.uuid4().hex[:6].upper()}"
         super().save(*args, **kwargs)
     
     def claim_gift_card(self, user):

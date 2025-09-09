@@ -355,16 +355,38 @@ class PurchaseHistorySerializer(serializers.ModelSerializer):
 
 
 class VoucherCreateSerializer(serializers.ModelSerializer):
+    display_image = serializers.SerializerMethodField()
+    image_url = serializers.SerializerMethodField()
+    
     class Meta:
         model = Voucher
         fields = [
-            "id","merchant","category","title", "message", "terms_conditions", "count", "image", "voucher_type",
+            "id","merchant","category","title", "message", "terms_conditions", "count", "image", "image_url", "display_image", "voucher_type",
             "percentage_value", "percentage_min_bill",
             "flat_amount", "flat_min_bill",
             "product_name", "product_min_bill",
             "is_gift_card", "is_active"
         ]
         read_only_fields = ["id","merchant", "category"]
+
+    def get_image_url(self, obj):
+        """Get the voucher image URL"""
+        if obj.image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.image.url)
+            return obj.image.url
+        return None
+    
+    def get_display_image(self, obj):
+        """Get the display image URL (voucher image or merchant banner as fallback)"""
+        image = obj.get_display_image()
+        if image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(image.url)
+            return image.url
+        return None
 
     def validate(self, data):
         """Validate voucher data based on voucher type"""
