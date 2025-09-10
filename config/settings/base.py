@@ -254,14 +254,14 @@ SWAGGER_SETTINGS = {
 }
 
 
-SPECTACULAR_SETTINGS = {
-    "SERVERS": [
-        {"url": "https://api.bartr.club/api", "description": "Production"},
-    ]
-}
+# SPECTACULAR_SETTINGS = {
+#     "SERVERS": [
+#         {"url": "https://api.bartr.club/api", "description": "Production"},
+#     ]
+# }
 
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-SECURE_SSL_REDIRECT = True
+# SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# SECURE_SSL_REDIRECT = True
 
 """
     This will allow to pass API KEY and User Token.

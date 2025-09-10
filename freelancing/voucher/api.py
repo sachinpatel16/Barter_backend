@@ -1389,6 +1389,7 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
     serializer_class = WhatsAppContactSerializer
     permission_classes = [permissions.IsAuthenticated]
     authentication_classes = [JWTAuthentication]
+    pagination_class = None  # Disable pagination for this ViewSet
 
     def get_queryset(self):
         # Handle case where request.user might not be available (e.g., during Swagger inspection)
@@ -1403,6 +1404,28 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
             serializer.save(user=self.request.user)
         else:
             raise ValidationError("User authentication required")
+
+    def list(self, request, *args, **kwargs):
+        """
+        List all WhatsApp contacts for the authenticated user.
+        
+        Returns contacts in the format:
+        {
+            "results": [
+                {
+                    "id": 27,
+                    "name": "John Doe",
+                    "phone_number": "+919876543210",
+                    "is_on_whatsapp": false
+                }
+            ]
+        }
+        """
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            "results": serializer.data
+        })
 
     @action(detail=False, methods=["post"], url_path="sync-contacts")
     def sync_contacts(self, request):
@@ -1476,8 +1499,8 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
                 serializer = self.get_serializer(whatsapp_contacts, many=True)
                 
                 return Response({
+                    "results": serializer.data,
                     "message": f"No new contacts to add. {len(skipped_contacts)} contacts already exist.",
-                    "whatsapp_contacts": serializer.data,
                     "validation_summary": {
                         "new_contacts": 0,
                         "skipped_contacts": len(skipped_contacts),
@@ -1513,8 +1536,8 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(whatsapp_contacts, many=True)
            
             return Response({
+                "results": serializer.data,
                 "message": f"Added {len(created_contacts)} new contacts, skipped {len(skipped_contacts)} existing contacts. Total WhatsApp contacts: {len(whatsapp_contacts)}",
-                "whatsapp_contacts": serializer.data,
                 "validation_summary": {
                     "new_contacts_added": len(created_contacts),
                     "existing_contacts_skipped": len(skipped_contacts),
@@ -1785,23 +1808,23 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
             # Fallback: assume all numbers in this chunk have WhatsApp if there's an error
             return {phone: True for phone in phone_numbers_chunk}
 
-    @action(detail=False, methods=["get"], url_path="whatsapp-contacts")
-    def whatsapp_contacts(self, request):
-        """Get only WhatsApp contacts"""
-        try:
-            whatsapp_contacts = WhatsAppContact.objects.filter(
-                user=request.user,
-                is_on_whatsapp=True
-            ).order_by('name')
+    # @action(detail=False, methods=["get"], url_path="whatsapp-contacts")
+    # def whatsapp_contacts(self, request):
+    #     """Get only WhatsApp contacts"""
+    #     try:
+    #         whatsapp_contacts = WhatsAppContact.objects.filter(
+    #             user=request.user,
+    #             is_on_whatsapp=True
+    #         ).order_by('name')
            
-            serializer = self.get_serializer(whatsapp_contacts, many=True)
-            return Response(serializer.data)
+    #         serializer = self.get_serializer(whatsapp_contacts, many=True)
+    #         return Response(serializer.data)
            
-        except Exception as e:
-            return Response(
-                {"error": "Failed to fetch WhatsApp contacts"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+    #     except Exception as e:
+    #         return Response(
+    #             {"error": "Failed to fetch WhatsApp contacts"},
+    #             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+    #         )
 
     @action(detail=False, methods=["post"], url_path="clear-contacts")
     def clear_contacts(self, request):

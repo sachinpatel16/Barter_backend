@@ -28,6 +28,33 @@ from django.utils.encoding import smart_str, force_bytes, DjangoUnicodeDecodeErr
 
 User = get_user_model()
 
+def validate_and_format_phone_number(value):
+    """Helper function to validate and format phone number with +91 country code if missing"""
+    if not value:
+        return value
+   
+    # Remove any spaces, dashes, or parentheses
+    cleaned_phone = re.sub(r'[\s\-\(\)]', '', value)
+   
+    # If phone number doesn't start with +, add +91
+    if not cleaned_phone.startswith('+'):
+        # Remove leading zeros if any
+        cleaned_phone = cleaned_phone.lstrip('0')
+       
+        # If it doesn't start with 91, add it
+        if not cleaned_phone.startswith('91'):
+            cleaned_phone = '91' + cleaned_phone
+       
+        # Add + prefix
+        cleaned_phone = '+' + cleaned_phone
+   
+    # Validate the phone number format (should be +91 followed by 10 digits)
+    if not re.match(r'^\+91[6-9]\d{9}$', cleaned_phone):
+        raise ValidationError(
+            _('Invalid phone number format. Please provide a valid 10-digit Indian mobile number.')
+        )
+   
+    return cleaned_phone
 
 class UserAuthSerializer(serializers.Serializer):
     # LOGIN_TYPE = (
@@ -45,7 +72,9 @@ class UserAuthSerializer(serializers.Serializer):
     # login_type = serializers.ChoiceField(required=True, choices=LOGIN_TYPE)
 
     # LOGIN_TYPE_DICT = dict(LOGIN_TYPE)
-
+    def validate_phone(self, value):
+        """Validate and format phone number with +91 country code if missing"""
+        return validate_and_format_phone_number(value)
     # def validate(self, attrs):
     #     login_type = attrs.get('login_type')
     #     email = attrs.get('email')
@@ -86,7 +115,11 @@ class BaseUserSerializer(serializers.ModelSerializer):
                     "password", "is_active")
         read_only_fields = ("uuid",)
         ref_name = "BaseUserSerializer_ref"
-        
+    
+    def validate_phone(self, value):
+        """Validate and format phone number with +91 country code if missing"""
+        return validate_and_format_phone_number(value)
+    
     def get_photo(self, obj):
         try:
             photo = obj.photo
@@ -331,6 +364,10 @@ class MerchantProfileSerializer(serializers.ModelSerializer):
             'latitude', 'longitude', 'logo', 'banner_image'
         ]
         read_only_fields = ['user']
+   
+    def validate_phone(self, value):
+        """Validate and format phone number with +91 country code if missing"""
+        return validate_and_format_phone_number(value)
 
     def validate(self, data):
         """Validate merchant profile data"""
