@@ -2727,6 +2727,8 @@ class MerchantVoucherScanViewSet(viewsets.ViewSet):
         serializer.is_valid(raise_exception=True)
         
         redemption_id = serializer.validated_data['redemption_id']
+        bill_amount = serializer.validated_data['bill_amount']
+        bill_number = serializer.validated_data.get('bill_number', '')
         location = serializer.validated_data.get('location', '')
         notes = serializer.validated_data.get('notes', '')
         quantity = serializer.validated_data.get('quantity', 1)
@@ -2769,7 +2771,9 @@ class MerchantVoucherScanViewSet(viewsets.ViewSet):
                 
                 # Process the redemption
                 try:
-                    redemption.redeem_voucher(
+                    success, discount_amount, final_amount = redemption.redeem_voucher(
+                        bill_amount=bill_amount,
+                        bill_number=bill_number,
                         location=location or f"{merchant_profile.business_name} - {merchant_profile.city or 'Unknown Location'}",
                         notes=f"Redeemed by merchant: {merchant_profile.business_name}. {notes}" if notes else f"Redeemed by merchant: {merchant_profile.business_name}",
                         quantity=quantity
@@ -2789,6 +2793,10 @@ class MerchantVoucherScanViewSet(viewsets.ViewSet):
                     "message": "Voucher redeemed successfully",
                     "voucher_title": voucher_title,
                     "user_name": user_name,
+                    "bill_amount": float(bill_amount),
+                    "bill_number": bill_number,
+                    "discount_amount": float(discount_amount),
+                    "final_amount": float(final_amount),
                     "redeemed_at": redemption.redeemed_at,
                     "redemption_location": redemption.redemption_location,
                     "purchase_reference": redemption.purchase_reference,

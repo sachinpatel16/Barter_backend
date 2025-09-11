@@ -195,7 +195,7 @@ class UserVoucherSerializer(serializers.ModelSerializer):
             'voucher_type', 'voucher_value', 'display_image', 'purchased_at',
             'redeemed_at', 'is_active', 'purchase_cost', 'purchase_reference',
             'purchase_status', 'expiry_date', 'redemption_location', 'redemption_notes',
-            'days_until_expiry', 'can_redeem'
+            'bill_amount', 'bill_number', 'discount_amount', 'final_amount', 'days_until_expiry', 'can_redeem'
         ]
    
     def get_voucher_value(self, obj):
@@ -496,6 +496,16 @@ class MerchantVoucherRedeemSerializer(serializers.Serializer):
     """Serializer for merchant voucher redemption"""
     redemption_id = serializers.IntegerField(
         help_text="ID of the voucher redemption record to redeem"
+    )
+    bill_amount = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Total bill amount before discount"
+    )
+    bill_number = serializers.CharField(
+        max_length=100,
+        required=False,
+        help_text="Bill number or invoice number for the transaction"
     )
     location = serializers.CharField(
         max_length=255,

@@ -141,7 +141,12 @@ class UserVoucherRedemption(BaseModel):
     voucher_purchase_count = models.PositiveIntegerField(default=1)  # How many vouchers purchased in this transaction
     voucher_redemption_count = models.PositiveIntegerField(default=0)  # How many vouchers redeemed from this purchase
     max_redemption_allowed = models.PositiveIntegerField(default=1)  # Maximum redemptions allowed from this purchase
-   
+    
+    # Bill amount and discount tracking fields
+    bill_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Total bill amount when voucher was redeemed")
+    bill_number = models.CharField(max_length=100, null=True, blank=True, help_text="Bill number or invoice number for the transaction")
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Discount amount applied from voucher")
+    final_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Final amount after discount")
      
     class Meta:
         unique_together = ['user', 'voucher']  # User can only purchase a voucher once
@@ -182,8 +187,8 @@ class UserVoucherRedemption(BaseModel):
             self.voucher_redemption_count < self.max_redemption_allowed
         )
 
-    def redeem_voucher(self, location=None, notes=None, quantity=1):
-        """Redeem a specific quantity of vouchers from this purchase"""
+    def redeem_voucher(self, bill_amount=None, bill_number=None, location=None, notes=None, quantity=1):
+        """Redeem a specific quantity of vouchers from this purchase with bill amount and discount calculation"""
         if not self.can_redeem_voucher():
             raise ValidationError("Voucher cannot be redeemed")
         
@@ -192,6 +197,43 @@ class UserVoucherRedemption(BaseModel):
         
         if quantity <= 0:
             raise ValidationError("Redemption quantity must be greater than 0")
+        
+        # Calculate discount if bill amount is provided
+        discount_amount = Decimal('0.00')
+        final_amount = bill_amount
+        
+        if bill_amount:
+            bill_amount = Decimal(str(bill_amount))
+            voucher = self.voucher
+            
+            # Calculate discount based on voucher type
+            if voucher.voucher_type.name == 'percentage':
+                # Check minimum bill requirement
+                if voucher.percentage_min_bill and bill_amount < voucher.percentage_min_bill:
+                    raise ValidationError(f"Minimum bill amount required: ₹{voucher.percentage_min_bill}")
+                
+                discount_amount = (bill_amount * voucher.percentage_value) / 100
+                
+            elif voucher.voucher_type.name == 'flat':
+                # Check minimum bill requirement
+                if voucher.flat_min_bill and bill_amount < voucher.flat_min_bill:
+                    raise ValidationError(f"Minimum bill amount required: ₹{voucher.flat_min_bill}")
+                
+                discount_amount = min(voucher.flat_amount, bill_amount)
+                
+            elif voucher.voucher_type.name == 'product':
+                # For product vouchers, discount is typically the product value
+                # You might want to set a specific discount amount for products
+                discount_amount = Decimal('0.00')  # Product vouchers might not have monetary discount
+            
+            # Calculate final amount
+            final_amount = bill_amount - discount_amount
+            
+            # Store bill and discount information
+            self.bill_amount = bill_amount
+            self.bill_number = bill_number
+            self.discount_amount = discount_amount
+            self.final_amount = final_amount
         
         try:
             with transaction.atomic():
@@ -217,7 +259,7 @@ class UserVoucherRedemption(BaseModel):
                 self.voucher.redemption_count = models.F('redemption_count') + quantity
                 self.voucher.save(update_fields=['redemption_count'])
                 
-                return True
+                return True, discount_amount, final_amount
                
         except DatabaseError as e:
             raise ValidationError("Failed to redeem voucher due to database error")
