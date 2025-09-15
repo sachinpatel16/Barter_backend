@@ -2,17 +2,19 @@
 
 ## 📋 Overview
 
-The Merchant Deal System provides functionality for merchant-to-merchant point-based deal exchange. Merchants can create deals, discover other merchants' deals, and exchange points through a structured process.
+The Merchant Deal System provides functionality for merchant-to-merchant **fixed point deal exchange**. Merchants can create deals with fixed point amounts, discover other merchants' deals, and exchange points through a structured, no-negotiation process.
 
 ## ✨ Key Features
 
-- **Point-Based Deals**: Merchants can create deals and exchange points
-- **Deal Discovery**: Find deals from other merchants
-- **Point Exchange**: Automatic point transfer when deals are completed
-- **Location-Based**: Deals can be filtered by city and location
+- **Fixed Point Deals**: Merchants create deals with fixed point amounts (no negotiation)
+- **Point-Based Exchange**: 1 Rupee = 10 Points conversion rate
+- **Deal Discovery**: Find deals from other merchants with merchant logos
+- **Automatic Point Transfer**: Seamless point exchange when deals are completed
+- **Location-Based Filtering**: Deals can be filtered by city and location
 - **Deal Management**: Create, update, activate, deactivate deals
 - **Real-time Notifications**: Instant notifications for deal activities
 - **Point Tracking**: Complete audit trail of point usage
+- **Merchant Logos**: Visual merchant identification in all API responses
 
 ## 🏗️ System Architecture
 
@@ -37,15 +39,21 @@ Main model for merchant deals with point-based system.
 
 #### MerchantDealRequest
 
-Model to track merchant deal requests.
+Model to track merchant deal requests with fixed point system.
 
 **Fields:**
 
 - `requesting_merchant`: Merchant requesting the deal
 - `deal`: Deal being requested
-- `points_requested`: Points requested
+- `points_requested`: Points requested (automatically set to deal's points_offered)
 - `status`: Request status (pending, accepted, rejected)
 - `message`: Request message
+
+**Fixed Point Logic:**
+
+- Points requested must exactly match deal's points_offered
+- No negotiation or counter-offers allowed
+- System automatically sets points_requested = deal.points_offered
 
 #### MerchantDealConfirmation
 
@@ -132,6 +140,7 @@ Content-Type: application/json
   "id": 1,
   "merchant": 1,
   "merchant_name": "Pizza Palace",
+  "merchant_logo": "http://localhost:8000/media/merchant/logo/pizza_logo.jpg",
   "title": "Food Delivery Service",
   "description": "Looking for reliable delivery partner",
   "points_offered": 500.0,
@@ -142,6 +151,8 @@ Content-Type: application/json
   "status": "active",
   "expiry_date": "2024-01-31T23:59:59Z",
   "is_expired": false,
+  "request_count": 0,
+  "confirmation_count": 0,
   "create_time": "2024-01-01T10:00:00Z"
 }
 ```
@@ -175,6 +186,7 @@ GET /api/custom_auth/v1/merchant-deals/
       "id": 1,
       "merchant": 1,
       "merchant_name": "Pizza Palace",
+      "merchant_logo": "http://localhost:8000/media/merchant/logo/pizza_logo.jpg",
       "title": "Food Delivery Service",
       "points_offered": 500.0,
       "points_remaining": 500.0,
@@ -272,6 +284,7 @@ GET /api/custom_auth/v1/deal-discovery/
       "id": 2,
       "merchant": 2,
       "merchant_name": "Delivery Co",
+      "merchant_logo": "http://localhost:8000/media/merchant/logo/delivery_logo.jpg",
       "title": "Marketing Support",
       "points_offered": 300.0,
       "points_remaining": 300.0,
@@ -299,6 +312,7 @@ GET /api/custom_auth/v1/deal-discovery/by-points/?points=500
       "id": 1,
       "merchant": 1,
       "merchant_name": "Pizza Palace",
+      "merchant_logo": "http://localhost:8000/media/merchant/logo/pizza_logo.jpg",
       "title": "Food Delivery Service",
       "points_offered": 500.0,
       "points_remaining": 500.0
@@ -312,20 +326,25 @@ GET /api/custom_auth/v1/deal-discovery/by-points/?points=500
 #### Create Deal Request
 
 ```http
-POST /api/custom_auth/v1/deal-requests/
+POST /api/custom_auth/v1/merchant-deal-requests/
 ```
 
-**Description:** Request to work on a deal.
+**Description:** Request to work on a deal with fixed point system.
 
 **Request Body:**
 
 ```json
 {
   "deal": 1,
-  "message": "I can provide delivery services in Mumbai",
-  "points_requested": 500.0
+  "message": "I can provide delivery services in Mumbai"
 }
 ```
+
+**Important Notes:**
+
+- `points_requested` is automatically set to the deal's `points_offered`
+- No negotiation allowed - fixed point system
+- Only one request per deal per merchant allowed
 
 **Response:**
 
@@ -334,8 +353,11 @@ POST /api/custom_auth/v1/deal-requests/
   "id": 1,
   "requesting_merchant": 2,
   "requesting_merchant_name": "Delivery Co",
+  "requesting_merchant_logo": "http://localhost:8000/media/merchant/logo/delivery_logo.jpg",
   "deal": 1,
   "deal_title": "Food Delivery Service",
+  "deal_merchant": "Pizza Palace",
+  "deal_merchant_logo": "http://localhost:8000/media/merchant/logo/pizza_logo.jpg",
   "status": "pending",
   "points_requested": 500.0
 }
@@ -344,10 +366,10 @@ POST /api/custom_auth/v1/deal-requests/
 #### Accept Deal Request
 
 ```http
-POST /api/custom_auth/v1/deal-requests/{id}/accept/
+POST /api/custom_auth/v1/merchant-deal-requests/{id}/accept/
 ```
 
-**Description:** Accept a deal request.
+**Description:** Accept a deal request with fixed points.
 
 **Response:**
 
@@ -360,7 +382,7 @@ POST /api/custom_auth/v1/deal-requests/{id}/accept/
 #### Reject Deal Request
 
 ```http
-POST /api/custom_auth/v1/deal-requests/{id}/reject/
+POST /api/custom_auth/v1/merchant-deal-requests/{id}/reject/
 ```
 
 **Description:** Reject a deal request.
@@ -378,7 +400,7 @@ POST /api/custom_auth/v1/deal-requests/{id}/reject/
 #### Get Deal Confirmations
 
 ```http
-GET /api/custom_auth/v1/deal-confirmations/
+GET /api/custom_auth/v1/merchant-deal-confirmations/
 ```
 
 **Description:** Get deal confirmations for the current merchant.
@@ -392,10 +414,15 @@ GET /api/custom_auth/v1/deal-confirmations/
       "id": 1,
       "deal": 1,
       "deal_title": "Food Delivery Service",
+      "merchant1": 1,
       "merchant1_name": "Pizza Palace",
+      "merchant1_logo": "http://localhost:8000/media/merchant/logo/pizza_logo.jpg",
+      "merchant2": 2,
       "merchant2_name": "Delivery Co",
+      "merchant2_logo": "http://localhost:8000/media/merchant/logo/delivery_logo.jpg",
       "status": "confirmed",
-      "points_exchanged": 500.0
+      "points_exchanged": 500.0,
+      "confirmation_time": "2024-01-01T10:30:00Z"
     }
   ]
 }
@@ -404,10 +431,10 @@ GET /api/custom_auth/v1/deal-confirmations/
 #### Complete Deal
 
 ```http
-POST /api/custom_auth/v1/deal-confirmations/{id}/complete/
+POST /api/custom_auth/v1/merchant-deal-confirmations/{id}/complete/
 ```
 
-**Description:** Complete a deal and transfer points.
+**Description:** Complete a deal and transfer points automatically.
 
 **Response:**
 
@@ -422,7 +449,7 @@ POST /api/custom_auth/v1/deal-confirmations/{id}/complete/
 #### Get Notifications
 
 ```http
-GET /api/custom_auth/v1/notifications/
+GET /api/custom_auth/v1/merchant-notifications/
 ```
 
 **Description:** Get merchant notifications.
@@ -447,7 +474,7 @@ GET /api/custom_auth/v1/notifications/
 #### Mark Notification as Read
 
 ```http
-POST /api/custom_auth/v1/notifications/{id}/mark-read/
+POST /api/custom_auth/v1/merchant-notifications/{id}/mark_read/
 ```
 
 **Description:** Mark a notification as read.
@@ -463,7 +490,7 @@ POST /api/custom_auth/v1/notifications/{id}/mark-read/
 #### Mark All Notifications as Read
 
 ```http
-POST /api/custom_auth/v1/notifications/mark-all-read/
+POST /api/custom_auth/v1/merchant-notifications/mark_all_read/
 ```
 
 **Description:** Mark all notifications as read.
@@ -479,7 +506,7 @@ POST /api/custom_auth/v1/notifications/mark-all-read/
 #### Get Unread Count
 
 ```http
-GET /api/custom_auth/v1/notifications/unread-count/
+GET /api/custom_auth/v1/merchant-notifications/unread_count/
 ```
 
 **Description:** Get count of unread notifications.
@@ -517,26 +544,35 @@ GET /api/custom_auth/v1/deal-stats/
 
 ## 🔄 Business Logic
 
+### Fixed Point Deal System
+
+The merchant deal system operates on a **fixed point model** where:
+
+- **No Negotiation**: Points offered are fixed and cannot be negotiated
+- **Take It or Leave It**: Merchants must accept the exact point amount offered
+- **Automatic Assignment**: `points_requested` is automatically set to `deal.points_offered`
+- **Simplified Process**: Eliminates complex counter-offer negotiations
+
 ### Deal Creation Process
 
-1. **Deal Creation**: Merchant creates deal with points offer
-2. **Point Deduction**: Points are deducted from merchant's wallet
+1. **Deal Creation**: Merchant creates deal with fixed points offer
+2. **Point Deduction**: Points are deducted from merchant's wallet immediately
 3. **Deal Activation**: Deal becomes available for other merchants
 4. **Point Locking**: Points are locked until deal completion or expiry
 
 ### Deal Request Process
 
-1. **Deal Discovery**: Other merchants browse available deals
-2. **Deal Request**: Merchant requests to work on a deal
+1. **Deal Discovery**: Other merchants browse available deals with merchant logos
+2. **Deal Request**: Merchant requests to work on a deal (points auto-set)
 3. **Request Review**: Deal creator reviews the request
 4. **Accept/Reject**: Deal creator accepts or rejects the request
-5. **Confirmation**: Both merchants confirm the deal
+5. **Confirmation**: Both merchants confirm the deal with fixed points
 
 ### Deal Completion Process
 
-1. **Deal Confirmation**: Both merchants agree on the deal
+1. **Deal Confirmation**: Both merchants agree on the deal with fixed points
 2. **Work Completion**: Work is completed as per deal terms
-3. **Point Transfer**: Points are automatically transferred
+3. **Point Transfer**: Points are automatically transferred (fixed amount)
 4. **Deal Completion**: Deal status is updated to completed
 5. **Usage Tracking**: Point usage is recorded in DealPointUsage
 
@@ -634,6 +670,32 @@ Merchant A Wallet → Points Deducted → Deal Created → Merchant B Works → 
 }
 ```
 
+## 🖼️ Merchant Logo Integration
+
+### Logo Display in API Responses
+
+All deal-related API responses now include merchant logos for better visual identification:
+
+- **Deal Lists**: Shows merchant logo for each deal
+- **Deal Requests**: Shows both requesting merchant and deal creator logos
+- **Deal Confirmations**: Shows both merchant logos involved
+- **Deal Discovery**: Shows merchant logos in search results
+
+### Logo URL Format
+
+```json
+{
+  "merchant_logo": "http://localhost:8000/media/merchant/logo/merchant_logo.jpg"
+}
+```
+
+### Logo Handling
+
+- **Safe Context Access**: Handles cases where request context might not be available
+- **Fallback URLs**: Returns relative URLs if absolute URLs can't be generated
+- **Null Handling**: Returns `null` if merchant has no logo
+- **No Breaking Changes**: Existing API functionality remains unchanged
+
 ## 🔒 Security Considerations
 
 1. **Authentication**: All endpoints require JWT token authentication
@@ -642,6 +704,7 @@ Merchant A Wallet → Points Deducted → Deal Created → Merchant B Works → 
 4. **Data Validation**: All input data is validated and sanitized
 5. **Atomic Transactions**: All point transfers are atomic and secure
 6. **Audit Trail**: Complete transaction history is maintained
+7. **Fixed Point Security**: No point manipulation through negotiation
 
 ## 📊 Integration Points
 
@@ -662,3 +725,57 @@ Merchant A Wallet → Points Deducted → Deal Created → Merchant B Works → 
 - Advanced filtering by category, location, and points
 - Search functionality for finding relevant deals
 - Recommendation system for matching merchants
+
+## 📋 Complete API Endpoints Summary
+
+### Merchant Deals
+
+- `GET /api/custom_auth/v1/merchant-deals/` - List merchant's deals
+- `POST /api/custom_auth/v1/merchant-deals/` - Create new deal
+- `GET /api/custom_auth/v1/merchant-deals/{id}/` - Get deal details
+- `PUT /api/custom_auth/v1/merchant-deals/{id}/` - Update deal
+- `POST /api/custom_auth/v1/merchant-deals/{id}/activate/` - Activate deal
+- `POST /api/custom_auth/v1/merchant-deals/{id}/deactivate/` - Deactivate deal
+- `GET /api/custom_auth/v1/merchant-deals/{id}/usage_history/` - Get usage history
+
+### Deal Discovery
+
+- `GET /api/custom_auth/v1/deal-discovery/` - Discover available deals
+- `GET /api/custom_auth/v1/deal-discovery/by_points/` - Filter by point range
+
+### Deal Requests
+
+- `GET /api/custom_auth/v1/merchant-deal-requests/` - List deal requests
+- `POST /api/custom_auth/v1/merchant-deal-requests/` - Create deal request
+- `POST /api/custom_auth/v1/merchant-deal-requests/{id}/accept/` - Accept request
+- `POST /api/custom_auth/v1/merchant-deal-requests/{id}/reject/` - Reject request
+
+### Deal Confirmations
+
+- `GET /api/custom_auth/v1/merchant-deal-confirmations/` - List confirmations
+- `POST /api/custom_auth/v1/merchant-deal-confirmations/{id}/complete/` - Complete deal
+- `GET /api/custom_auth/v1/merchant-deal-confirmations/{id}/usage_history/` - Get usage history
+
+### Notifications
+
+- `GET /api/custom_auth/v1/merchant-notifications/` - List notifications
+- `POST /api/custom_auth/v1/merchant-notifications/{id}/mark_read/` - Mark as read
+- `POST /api/custom_auth/v1/merchant-notifications/mark_all_read/` - Mark all as read
+- `GET /api/custom_auth/v1/merchant-notifications/unread_count/` - Get unread count
+
+### Statistics
+
+- `GET /api/custom_auth/v1/deal-stats/` - Get deal statistics
+
+## 🎯 Key Features Summary
+
+✅ **Fixed Point Deals** - No negotiation, take it or leave it system  
+✅ **Merchant Logos** - Visual identification in all API responses  
+✅ **Point Conversion** - 1 Rupee = 10 Points  
+✅ **Real-time Notifications** - Instant updates for all activities  
+✅ **Complete Audit Trail** - Full transaction history tracking  
+✅ **Location Filtering** - Find deals by city and location  
+✅ **Category Filtering** - Filter deals by business category  
+✅ **Automatic Point Transfer** - Seamless point exchange system  
+✅ **Deal Management** - Full CRUD operations for deals  
+✅ **Security** - JWT authentication and data validation
