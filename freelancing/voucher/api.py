@@ -910,7 +910,7 @@ class VoucherPurchaseViewSet(viewsets.ViewSet):
                     "remaining_balance": float(wallet.balance),
                     "redemption_id": redemption.id,
                     "purchase_reference": redemption.purchase_reference,
-                    "expiry_date": redemption.expiry_date,
+                    "expiry_date": redemption.expiry_date.isoformat() if redemption.expiry_date else None,
                     "transaction_id": transaction_id
                 }, status=status.HTTP_201_CREATED)
                 
@@ -1207,12 +1207,12 @@ class UserVoucherViewSet(viewsets.ReadOnlyModelViewSet):
                 if redemption.is_expired():
                     return Response({
                         "error": "Voucher has expired",
-                        "expiry_date": redemption.expiry_date
+                        "expiry_date": redemption.expiry_date.isoformat() if redemption.expiry_date else None
                     }, status=status.HTTP_400_BAD_REQUEST)
                 elif redemption.purchase_status == 'redeemed':
                     return Response({
                         "error": "Voucher has already been fully redeemed",
-                        "redeemed_at": redemption.redeemed_at
+                        "redeemed_at": redemption.redeemed_at.isoformat() if redemption.redeemed_at else None
                     }, status=status.HTTP_400_BAD_REQUEST)
                 else:
                     return Response({
@@ -1229,7 +1229,7 @@ class UserVoucherViewSet(viewsets.ReadOnlyModelViewSet):
                 "address": merchant.address,
                 "city": merchant.city,
                 "state": merchant.state,
-                "phone": getattr(merchant, 'phone', None),
+                "phone": str(getattr(merchant, 'phone', None)) if getattr(merchant, 'phone', None) else None,
                 "email": getattr(merchant, 'email', None),
                 "category": merchant.category.name if merchant.category else None
             }
@@ -1244,8 +1244,8 @@ class UserVoucherViewSet(viewsets.ReadOnlyModelViewSet):
                     "voucher_value": self._get_voucher_value(redemption.voucher),
                     "image": self._get_voucher_image_url(redemption.voucher),
                     "display_image": self._get_voucher_display_image_url(redemption.voucher),
-                    "purchased_at": redemption.purchased_at,
-                    "expiry_date": redemption.expiry_date,
+                    "purchased_at": redemption.purchased_at.isoformat() if redemption.purchased_at else None,
+                    "expiry_date": redemption.expiry_date.isoformat() if redemption.expiry_date else None,
                     "remaining_redemptions": redemption.get_remaining_redemptions()
                 },
                 "merchant_details": merchant_details,
@@ -2561,15 +2561,15 @@ class MerchantVoucherScanViewSet(viewsets.ViewSet):
                     return Response({
                         "error": "Voucher has expired",
                         "debug_info": {
-                            "expiry_date": redemption.expiry_date,
-                            "current_time": timezone.now()
+                            "expiry_date": redemption.expiry_date.isoformat() if redemption.expiry_date else None,
+                            "current_time": timezone.now().isoformat()
                         }
                     }, status=status.HTTP_400_BAD_REQUEST)
                 elif redemption.purchase_status == 'redeemed':
                     return Response({
                         "error": "Voucher has already been fully redeemed",
                         "debug_info": {
-                            "redeemed_at": redemption.redeemed_at,
+                            "redeemed_at": redemption.redeemed_at.isoformat() if redemption.redeemed_at else None,
                             "redemption_count": redemption.voucher_redemption_count
                         }
                     }, status=status.HTTP_400_BAD_REQUEST)
@@ -2641,8 +2641,8 @@ class MerchantVoucherScanViewSet(viewsets.ViewSet):
                     "image": self._get_voucher_image_url(redemption.voucher),
                     "display_image": self._get_voucher_display_image_url(redemption.voucher),
                     "user_info": user_info,
-                    "purchased_at": redemption.purchased_at,
-                    "expiry_date": redemption.expiry_date,
+                    "purchased_at": redemption.purchased_at.isoformat() if redemption.purchased_at else None,
+                    "expiry_date": redemption.expiry_date.isoformat() if redemption.expiry_date else None,
                     "remaining_redemptions": redemption.get_remaining_redemptions(),
                     "purchase_reference": redemption.purchase_reference,
                     "redemption_id": redemption.id,
@@ -2656,8 +2656,8 @@ class MerchantVoucherScanViewSet(viewsets.ViewSet):
                     "voucher_type": "Unknown",
                     "voucher_value": "Contact Support",
                     "user_info": user_info,
-                    "purchased_at": redemption.purchased_at,
-                    "expiry_date": redemption.expiry_date,
+                    "purchased_at": redemption.purchased_at.isoformat() if redemption.purchased_at else None,
+                    "expiry_date": redemption.expiry_date.isoformat() if redemption.expiry_date else None,
                     "remaining_redemptions": redemption.get_remaining_redemptions(),
                     "purchase_reference": redemption.purchase_reference,
                     "redemption_id": redemption.id,
@@ -2797,7 +2797,7 @@ class MerchantVoucherScanViewSet(viewsets.ViewSet):
                     "bill_number": bill_number,
                     "discount_amount": float(discount_amount),
                     "final_amount": float(final_amount),
-                    "redeemed_at": redemption.redeemed_at,
+                    "redeemed_at": redemption.redeemed_at.isoformat() if redemption.redeemed_at else None,
                     "redemption_location": redemption.redemption_location,
                     "purchase_reference": redemption.purchase_reference,
                     "quantity_redeemed": quantity,
@@ -2947,7 +2947,7 @@ class GiftCardClaimViewSet(viewsets.ViewSet):
                         "merchant": new_redemption.voucher.merchant.business_name,
                         "voucher_type": new_redemption.voucher.voucher_type.name,
                         "voucher_value": self._get_voucher_value(new_redemption.voucher),
-                        "expiry_date": new_redemption.expiry_date,
+                        "expiry_date": new_redemption.expiry_date.isoformat() if new_redemption.expiry_date else None,
                         "purchase_reference": new_redemption.purchase_reference,
                         "claim_reference": claim_reference
                     },
