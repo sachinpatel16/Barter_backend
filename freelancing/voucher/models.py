@@ -1,0 +1,457 @@
+import uuid
+from django.utils.translation import gettext_lazy as _
+from django.db import models
+from freelancing.custom_auth.models import MerchantProfile, BaseModel, Category
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
+from django.db import transaction, DatabaseError
+from django.utils import timezone
+from freelancing.custom_auth.models import Wallet
+from decimal import Decimal
+
+User = get_user_model()
+
+# Create your models here.
+class VoucherType(BaseModel):
+    name = models.CharField("Voucher Type Name", max_length=100, unique=True)
+
+    def __str__(self):
+        return self.name
+
+class Voucher(BaseModel):
+    DEFAULT_TERMS = """Only one offer can be redeemed per transaction.
+This offer is applicable once per user.
+This offer can't be redeemed or clubbed with any other offers.
+This offer is valid in select McDonald's (Hardcastle Restaurants) Branches in the West and South of India.
+This offer is not applicable on delivery orders.
+This offer cannot be replaced with cash.
+This offer is valid while stocks lasts - McDonald's West and South (Hardcastle Restaurants Pvt. Ltd.) reserves the right to change the offers, menu and offers period any time without prior notice."""
+
+    TYPE_PERCENTAGE = 'percentage'
+    TYPE_FLAT = 'flat'
+    TYPE_PRODUCT = 'product'
+    uuid = models.UUIDField(
+        verbose_name=_("uuid"),
+        unique=True,
+        help_text=_(
+            "Required. A 32 hexadecimal digits number as specified in RFC 4122"
+        ),
+        error_messages={
+            "unique": _("A user with that uuid already exists."),
+        },
+        default=uuid.uuid4,
+    )
+    merchant = models.ForeignKey(MerchantProfile, on_delete=models.CASCADE, related_name='vouchers')
+    title = models.CharField("Title", max_length=255)
+    message = models.TextField("Message")
+    terms_conditions = models.TextField("Terms & Conditions", blank=True, default=DEFAULT_TERMS)
+    count = models.PositiveIntegerField("Redemption Count", null=True, blank=True)
+    image = models.ImageField(upload_to="vouchers/", null=True, blank=True)
+    voucher_type = models.ForeignKey(VoucherType, on_delete=models.PROTECT, related_name='vouchers')
+
+    # Type Specific Fields
+    percentage_value = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    percentage_min_bill = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+
+    flat_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    flat_min_bill = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+
+    product_name = models.CharField(max_length=255, null=True, blank=True)
+    product_min_bill = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+
+    category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True, related_name='vouchers')
+    redemption_count = models.PositiveIntegerField(default=0)
+    purchase_count = models.PositiveIntegerField(default=0)  # Track total purchases
+    
+    is_gift_card = models.BooleanField(default=False)  # Hide from frontend listing
+
+    def get_display_image(self):
+        return self.image or self.merchant.banner_image
+
+    def get_popularity_score(self):
+        """Calculate popularity score based on purchases and redemptions"""
+        return self.purchase_count * 2 + self.redemption_count
+
+    def get_redemption_rate(self):
+        """Calculate redemption rate percentage"""
+        if self.purchase_count > 0:
+            return round((self.redemption_count / self.purchase_count) * 100, 2)
+        return 0.0
+
+    def __str__(self):
+        return f"{self.title} - {self.voucher_type.name} (Purchased: {self.purchase_count}, Redeemed: {self.redemption_count})"
+
+    class Meta:
+        ordering = ['-create_time']
+
+
+class Advertisement(BaseModel):
+    voucher = models.OneToOneField(Voucher, on_delete=models.CASCADE, related_name="advertisement")
+    banner_image = models.ImageField(upload_to="advertisements/")
+    start_date = models.DateField()
+    end_date = models.DateField()
+    city = models.CharField(max_length=100)
+    state = models.CharField(max_length=100)
+
+    def clean(self):
+        if not self.banner_image:
+            raise ValidationError("Banner image is required to promote the voucher.")
+    def __str__(self):
+        return f"Ad: {self.voucher.title} in {self.city}, {self.state}"
+
+
+class WhatsAppContact(BaseModel):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="whatsapp_contacts")
+    name = models.CharField(max_length=255)
+    phone_number = models.CharField(max_length=20)
+    is_on_whatsapp = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"{self.name} ({'✅' if self.is_on_whatsapp else '❌'})"
+
+class UserVoucherRedemption(BaseModel):
+    """Track which users purchased and redeemed which vouchers"""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='voucher_redemptions')
+    voucher = models.ForeignKey(Voucher, on_delete=models.CASCADE, related_name='user_redemptions')
+    purchased_at = models.DateTimeField(auto_now_add=True)
+    redeemed_at = models.DateTimeField(null=True, blank=True)
+    is_gift_voucher = models.BooleanField(default=False)  # Track if it was a gift voucher redemption
+    purchase_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)  # Cost in wallet points
+    is_active = models.BooleanField(default=True)  # Whether the voucher is still valid
+   
+    # Additional fields for better purchase management
+    purchase_reference = models.CharField(max_length=100, unique=True, null=True, blank=True)  # Unique purchase ID
+    purchase_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('purchased', 'Purchased'),
+            ('redeemed', 'Redeemed'),
+            ('expired', 'Expired'),
+            ('cancelled', 'Cancelled'),
+            ('refunded', 'Refunded')
+        ],
+        default='purchased'
+    )
+    expiry_date = models.DateTimeField(null=True, blank=True)  # When voucher expires
+    redemption_location = models.CharField(max_length=255, null=True, blank=True)  # Where voucher was redeemed
+    redemption_notes = models.TextField(null=True, blank=True)  # Additional notes for redemption
+    wallet_transaction_id = models.CharField(max_length=100, null=True, blank=True)  # Reference to wallet transaction
+    
+    # New fields for tracking voucher counts
+    voucher_purchase_count = models.PositiveIntegerField(default=1)  # How many vouchers purchased in this transaction
+    voucher_redemption_count = models.PositiveIntegerField(default=0)  # How many vouchers redeemed from this purchase
+    max_redemption_allowed = models.PositiveIntegerField(default=1)  # Maximum redemptions allowed from this purchase
+    
+    # Bill amount and discount tracking fields
+    bill_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Total bill amount when voucher was redeemed")
+    bill_number = models.CharField(max_length=100, null=True, blank=True, help_text="Bill number or invoice number for the transaction")
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Discount amount applied from voucher")
+    final_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Final amount after discount")
+     
+    class Meta:
+        unique_together = ['user', 'voucher']  # User can only purchase a voucher once
+        ordering = ['-purchased_at']
+   
+    def __str__(self):
+        return f"{self.user.fullname} purchased {self.voucher.title} (Qty: {self.voucher_purchase_count}, Redeemed: {self.voucher_redemption_count})"
+
+    def save(self, *args, **kwargs):
+        # Generate unique purchase reference if not provided
+        if not self.purchase_reference:
+            import uuid
+            self.purchase_reference = f"VCH-{uuid.uuid4().hex[:8].upper()}"
+       
+        # Set expiry date if not provided (default 1 year from purchase)
+        if not self.expiry_date:
+            from datetime import timedelta
+            # Use current time if purchased_at is not set yet
+            base_time = self.purchased_at if self.purchased_at else timezone.now()
+            self.expiry_date = base_time + timedelta(days=365)
+        
+        # Set max redemption allowed based on purchase count
+        if not self.max_redemption_allowed:
+            self.max_redemption_allowed = self.voucher_purchase_count
+      
+        super().save(*args, **kwargs)
+
+    def get_remaining_redemptions(self):
+        """Get remaining redemptions available"""
+        return max(0, self.max_redemption_allowed - self.voucher_redemption_count)
+
+    def can_redeem_voucher(self):
+        """Check if voucher can be redeemed (has remaining redemptions)"""
+        return (
+            self.is_active and
+            not self.is_expired() and
+            self.purchase_status == 'purchased' and
+            self.voucher_redemption_count < self.max_redemption_allowed
+        )
+
+    def redeem_voucher(self, bill_amount=None, bill_number=None, location=None, notes=None, quantity=1):
+        """Redeem a specific quantity of vouchers from this purchase with bill amount and discount calculation"""
+        if not self.can_redeem_voucher():
+            raise ValidationError("Voucher cannot be redeemed")
+        
+        if quantity > self.get_remaining_redemptions():
+            raise ValidationError(f"Only {self.get_remaining_redemptions()} redemptions remaining")
+        
+        if quantity <= 0:
+            raise ValidationError("Redemption quantity must be greater than 0")
+        
+        # Calculate discount if bill amount is provided
+        discount_amount = Decimal('0.00')
+        final_amount = bill_amount
+        
+        if bill_amount:
+            bill_amount = Decimal(str(bill_amount))
+            voucher = self.voucher
+            
+            # Calculate discount based on voucher type
+            if voucher.voucher_type.name == 'percentage':
+                # Check minimum bill requirement
+                if voucher.percentage_min_bill and bill_amount < voucher.percentage_min_bill:
+                    raise ValidationError(f"Minimum bill amount required: ₹{voucher.percentage_min_bill}")
+                
+                discount_amount = (bill_amount * voucher.percentage_value) / 100
+                
+            elif voucher.voucher_type.name == 'flat':
+                # Check minimum bill requirement
+                if voucher.flat_min_bill and bill_amount < voucher.flat_min_bill:
+                    raise ValidationError(f"Minimum bill amount required: ₹{voucher.flat_min_bill}")
+                
+                discount_amount = min(voucher.flat_amount, bill_amount)
+                
+            elif voucher.voucher_type.name == 'product':
+                # For product vouchers, discount is typically the product value
+                # You might want to set a specific discount amount for products
+                discount_amount = Decimal('0.00')  # Product vouchers might not have monetary discount
+            
+            # Calculate final amount
+            final_amount = bill_amount - discount_amount
+            
+            # Store bill and discount information
+            self.bill_amount = bill_amount
+            self.bill_number = bill_number
+            self.discount_amount = discount_amount
+            self.final_amount = final_amount
+        
+        try:
+            with transaction.atomic():
+                # Update redemption details
+                self.voucher_redemption_count += quantity
+                
+                # If all vouchers are redeemed, mark as fully redeemed
+                if self.voucher_redemption_count >= self.max_redemption_allowed:
+                    self.redeemed_at = timezone.now()
+                    self.is_active = False
+                    self.purchase_status = 'redeemed'
+                
+                if location:
+                    self.redemption_location = location
+                if notes:
+                    self.redemption_notes = f"{notes} (Redeemed {quantity} voucher(s))"
+                else:
+                    self.redemption_notes = f"Redeemed {quantity} voucher(s)"
+                
+                self.save()
+               
+                # Increment voucher redemption count atomically
+                self.voucher.redemption_count = models.F('redemption_count') + quantity
+                self.voucher.save(update_fields=['redemption_count'])
+                
+                return True, discount_amount, final_amount
+               
+        except DatabaseError as e:
+            raise ValidationError("Failed to redeem voucher due to database error")
+        except Exception as e:
+            raise ValidationError("Failed to redeem voucher")
+
+    def redeem(self, location=None, notes=None):
+        """Mark voucher as fully redeemed (backward compatibility)"""
+        return self.redeem_voucher(location, notes, self.get_remaining_redemptions())
+
+    def is_expired(self):
+        """Check if voucher has expired"""
+        if self.expiry_date:
+            return timezone.now() > self.expiry_date
+        return False
+
+    def can_redeem(self):
+        """Check if voucher can be redeemed (backward compatibility)"""
+        return self.can_redeem_voucher()
+
+    def cancel_purchase(self, reason=None):
+        """Cancel a voucher purchase (for refunds) with atomic transaction"""
+        if self.redeemed_at or self.voucher_redemption_count > 0:
+            raise ValidationError("Cannot cancel redeemed voucher")
+       
+        try:
+            with transaction.atomic():
+                self.is_active = False
+                self.purchase_status = 'cancelled'
+                if reason:
+                    self.redemption_notes = f"Cancelled: {reason}"
+                self.save()
+               
+        except DatabaseError as e:
+            raise ValidationError("Failed to cancel voucher due to database error")
+        except Exception as e:
+            raise ValidationError("Failed to cancel voucher")
+
+    def refund_purchase(self, reason=None):
+        """Refund a voucher purchase with atomic transaction"""
+        if self.redeemed_at or self.voucher_redemption_count > 0:
+            raise ValidationError("Cannot refund redeemed voucher")
+       
+        try:
+            with transaction.atomic():
+                # Update voucher status
+                self.is_active = False
+                self.purchase_status = 'refunded'
+                if reason:
+                    self.redemption_notes = f"Refunded: {reason}"
+                self.save()
+
+                # Refund to wallet with atomic transaction
+                try:
+                    wallet = Wallet.objects.select_for_update().get(user=self.user)
+                    wallet.credit(
+                        self.purchase_cost,
+                        note=f"Voucher Refund: {self.voucher.title}",
+                        ref_id=self.purchase_reference
+                    )
+                except Wallet.DoesNotExist:
+                    raise ValidationError("User wallet not found for refund")
+                except Exception as e:
+                    raise ValidationError("Failed to process wallet refund")
+                   
+        except ValidationError:
+            raise
+        except DatabaseError as e:
+            raise ValidationError("Failed to refund voucher due to database error")
+        except Exception as e:
+            raise ValidationError("Failed to refund voucher")
+
+    @classmethod
+    def get_user_voucher_stats(cls, user):
+        """Get voucher statistics for a specific user"""
+        user_vouchers = cls.objects.filter(user=user)
+        
+        total_purchased = sum(v.voucher_purchase_count for v in user_vouchers)
+        total_redeemed = sum(v.voucher_redemption_count for v in user_vouchers)
+        active_vouchers = user_vouchers.filter(is_active=True, purchase_status='purchased').count()
+        expired_vouchers = user_vouchers.filter(purchase_status='expired').count()
+        
+        return {
+            'total_purchased': total_purchased,
+            'total_redeemed': total_redeemed,
+            'active_vouchers': active_vouchers,
+            'expired_vouchers': expired_vouchers,
+            'redemption_rate': round((total_redeemed / total_purchased * 100), 2) if total_purchased > 0 else 0
+        }
+
+    @classmethod
+    def bulk_expire_vouchers(cls):
+        """Bulk expire vouchers that have passed their expiry date"""
+        try:
+            with transaction.atomic():
+                expired_vouchers = cls.objects.filter(
+                    purchase_status='purchased',
+                    expiry_date__lt=timezone.now(),
+                    voucher_redemption_count__lt=models.F('max_redemption_allowed')
+                )
+               
+                count = expired_vouchers.update(
+                    is_active=False,
+                    purchase_status='expired',
+                    redemption_notes=models.F('redemption_notes') + f" | Auto-expired on {timezone.now()}"
+                )
+               
+                return count
+               
+        except DatabaseError as e:
+            raise ValidationError("Failed to expire vouchers due to database error")
+        except Exception as e:
+            raise ValidationError("Failed to expire vouchers")
+
+    def get_remaining_days(self):
+        """Get remaining days until expiry"""
+        if self.expiry_date:
+            delta = self.expiry_date - timezone.now()
+            return max(0, delta.days)
+        return None
+
+    def is_about_to_expire(self, days_threshold=7):
+        """Check if voucher is about to expire"""
+        remaining_days = self.get_remaining_days()
+        return remaining_days is not None and remaining_days <= days_threshold
+
+
+class GiftCardShare(BaseModel):
+    """
+    Track gift card shares to multiple users
+    Each share creates an independent redemption record for the recipient
+    """
+    original_purchase = models.ForeignKey(
+        UserVoucherRedemption, 
+        on_delete=models.CASCADE, 
+        related_name='gift_card_shares'
+    )
+    recipient_phone = models.CharField(max_length=20)  # Recipient's phone number
+    recipient_name = models.CharField(max_length=255, blank=True)  # Recipient's name (optional)
+    shared_via = models.CharField(
+        max_length=20, 
+        choices=[('whatsapp', 'WhatsApp'), ('sms', 'SMS'), ('email', 'Email')],
+        default='whatsapp'
+    )
+    is_claimed = models.BooleanField(default=False)  # Whether recipient has claimed the gift card
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    claimed_by_user = models.ForeignKey(
+        User, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='claimed_gift_cards'
+    )
+    claim_reference = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    
+    class Meta:
+        unique_together = ['original_purchase', 'recipient_phone']
+        ordering = ['-create_time']
+    
+    def __str__(self):
+        return f"Gift card shared to {self.recipient_phone} by {self.original_purchase.user.fullname}"
+    
+    def save(self, *args, **kwargs):
+        # Generate unique claim reference if not provided
+        if not self.claim_reference:
+            import uuid
+            self.claim_reference = f"GFT-{uuid.uuid4().hex[:6].upper()}"
+        super().save(*args, **kwargs)
+    
+    def claim_gift_card(self, user):
+        """Claim the gift card for a specific user"""
+        if self.is_claimed:
+            raise ValidationError("Gift card has already been claimed")
+        
+        # Create a new UserVoucherRedemption for the recipient
+        new_redemption = UserVoucherRedemption.objects.create(
+            user=user,
+            voucher=self.original_purchase.voucher,
+            is_gift_voucher=True,
+            purchase_cost=Decimal('0.00'),  # Free for recipient
+            purchase_reference=self.claim_reference,
+            purchase_status='purchased',
+            expiry_date=self.original_purchase.expiry_date,
+            wallet_transaction_id=f"GIFT-{self.claim_reference}",
+            voucher_purchase_count=1,
+            max_redemption_allowed=1
+        )
+        
+        # Mark as claimed
+        self.is_claimed = True
+        self.claimed_at = timezone.now()
+        self.claimed_by_user = user
+        self.save()
+        
+        return new_redemption
