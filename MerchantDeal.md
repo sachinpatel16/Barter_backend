@@ -15,6 +15,8 @@ The Merchant Deal System provides functionality for merchant-to-merchant **fixed
 - **Real-time Notifications**: Instant notifications for deal activities
 - **Point Tracking**: Complete audit trail of point usage
 - **Merchant Logos**: Visual merchant identification in all API responses
+- **Upfront Point Deduction**: Points are deducted immediately when deal is created
+- **Filter-Based Actions**: Accept/reject requests using query parameters
 
 ## 🏗️ System Architecture
 
@@ -129,9 +131,11 @@ Content-Type: application/json
 
 **Important Notes:**
 
-- Points are deducted from merchant's wallet when deal is created
+- **Points are deducted immediately** from merchant's wallet when deal is created
 - Deal becomes active immediately after creation
-- Points are locked until deal is completed or expired
+- Points are locked in the deal until completion or expiry
+- If no category provided, merchant's default category is automatically assigned
+- Deal value is auto-calculated (points_offered / 10)
 
 **Response:**
 
@@ -144,6 +148,7 @@ Content-Type: application/json
   "title": "Food Delivery Service",
   "description": "Looking for reliable delivery partner",
   "points_offered": 500.0,
+  "points_used": 0.0,
   "points_remaining": 500.0,
   "deal_value": 50.0,
   "category": 1,
@@ -355,6 +360,7 @@ Content-Type: application/json
 - No negotiation allowed - fixed point system
 - Only one request per deal per merchant allowed
 - Notification sent to deal creator immediately
+- Cannot request your own deals
 
 **Response:**
 
@@ -388,21 +394,8 @@ GET /api/custom_auth/v1/merchant-deal-requests/
 - `status`: Filter by request status (pending, accepted, rejected)
 - `deal__category`: Filter by deal category
 - `points_requested`: Filter by points requested
-- `action`: Action to perform (accept, reject)
-- `request_id`: ID of request to perform action on
 
-**Examples:**
-
-```http
-# Get all pending requests
-GET /api/custom_auth/v1/merchant-deal-requests/?status=pending
-
-# Accept request ID 123
-GET /api/custom_auth/v1/merchant-deal-requests/?action=accept&request_id=123
-
-# Reject request ID 456
-GET /api/custom_auth/v1/merchant-deal-requests/?action=reject&request_id=456
-```
+**Note:** This endpoint is for requests made BY the current merchant, not requests received FOR their deals.
 
 **Response:**
 
@@ -460,6 +453,13 @@ GET /api/custom_auth/v1/received-requests/?action=reject&request_id=456
 # Get requests for specific category
 GET /api/custom_auth/v1/received-requests/?deal__category=1&status=pending
 ```
+
+**Important Notes:**
+
+- Only deal creator can accept/reject requests
+- Accepting one request automatically rejects all other pending requests for the same deal
+- Points are marked as used when request is accepted
+- Deal confirmation is created automatically upon acceptance
 
 **Response:**
 
@@ -539,7 +539,7 @@ GET /api/custom_auth/v1/merchant-deal-confirmations/
 #### Complete Deal
 
 ```http
-POST /api/custom_auth/v1/merchant-deal-confirmations/{id}/complete/
+POST /api/custom_auth/v1/deal-confirmations/{id}/complete/
 ```
 
 **Description:** Complete a deal and transfer points automatically.
@@ -560,6 +560,7 @@ Content-Type: application/json
 - Transfer is atomic - either both wallets update or neither
 - Complete audit trail is created
 - Notifications sent to both merchants
+- **No additional point deduction** - points are already locked in the deal
 
 **Response:**
 
@@ -573,8 +574,8 @@ Content-Type: application/json
 
 1. **Point Transfer Creation**: `MerchantPointsTransfer` record created
 2. **Wallet Updates**:
-   - Points deducted from Merchant A (deal creator)
-   - Points added to Merchant B (requester)
+   - Points transferred from Merchant A (deal creator) to Merchant B (requester)
+   - No additional deduction - points move from locked state to requester
 3. **Deal Status Update**: Deal status changed to 'completed'
 4. **Audit Trail**: `DealPointUsage` record created
 5. **Notifications**: Both merchants notified of successful transfer
@@ -704,13 +705,13 @@ graph TD
     G --> H[Merchant A Reviews]
 
     H --> I{Accept/Reject?}
-    I -->|Accept| J[Auto-reject others]
+    I -->|Accept| J[Auto-reject others<br/>Points marked as used]
     I -->|Reject| K[Request Rejected]
 
     J --> L[Deal Confirmed<br/>Points still locked]
     L --> M[Merchant B Works]
     M --> N[Complete Deal]
-    N --> O[Points Transfer: A→B]
+    N --> O[Points Transfer: A→B<br/>No additional deduction]
     O --> P[Final State:<br/>A: 500 points<br/>B: 700 points]
 
     K --> Q[End: No transfer]
@@ -754,7 +755,7 @@ graph TD
 6. **Accept Request (Auto-Rejection)**:
    - When Merchant A accepts a request, all other pending requests for the same deal are automatically rejected
    - Deal confirmation is created with status 'confirmed'
-   - Deal points are marked as used
+   - Deal points are marked as used (points_used += points_offered)
    - Notifications sent to all involved merchants
 
 #### Phase 4: Deal Completion & Point Transfer
@@ -768,6 +769,7 @@ graph TD
 
    - System creates `MerchantPointsTransfer` record
    - Points are **transferred from Merchant A to Merchant B**
+   - **No additional deduction** - points move from locked state to requester
    - Transfer includes transaction ID and audit trail
    - Both wallets are updated atomically
 
@@ -801,6 +803,7 @@ graph TD
    Merchant A Wallet: 500 points (no change - already deducted)
    Merchant B Wallet: 700 points (+500 received)
    Deal Status: Completed
+   **Note**: No additional deduction - points just move from locked state to requester
 ```
 
 #### Key Points:
@@ -808,6 +811,7 @@ graph TD
 - **Points are deducted upfront** when deal is created (not when completed)
 - **Points are locked** in the deal until completion or expiry
 - **No double deduction** - points only move once (from creator to requester)
+- **No additional deduction on completion** - points just transfer from locked state
 - **Atomic transfers** - either both wallets update or neither
 - **Complete audit trail** - every transaction is tracked
 - **Automatic notifications** - all parties are informed of status changes
@@ -1051,10 +1055,8 @@ The system integrates with the existing wallet system:
 
 ### Deal Requests
 
-- `GET /api/custom_auth/v1/merchant-deal-requests/` - List deal requests (with filter-based actions)
+- `GET /api/custom_auth/v1/merchant-deal-requests/` - List deal requests made by current merchant
 - `POST /api/custom_auth/v1/merchant-deal-requests/` - Create deal request
-- `GET /api/custom_auth/v1/merchant-deal-requests/?action=accept&request_id={id}` - Accept request
-- `GET /api/custom_auth/v1/merchant-deal-requests/?action=reject&request_id={id}` - Reject request
 
 ### Received Requests
 
@@ -1064,9 +1066,9 @@ The system integrates with the existing wallet system:
 
 ### Deal Confirmations
 
-- `GET /api/custom_auth/v1/merchant-deal-confirmations/` - List confirmations
-- `POST /api/custom_auth/v1/merchant-deal-confirmations/{id}/complete/` - Complete deal
-- `GET /api/custom_auth/v1/merchant-deal-confirmations/{id}/usage_history/` - Get usage history
+- `GET /api/custom_auth/v1/deal-confirmations/` - List confirmations
+- `POST /api/custom_auth/v1/deal-confirmations/{id}/complete/` - Complete deal
+- `GET /api/custom_auth/v1/deal-confirmations/{id}/usage_history/` - Get usage history
 
 ### Notifications
 
@@ -1095,7 +1097,8 @@ The system integrates with the existing wallet system:
 ✅ **Security** - JWT authentication and data validation  
 ✅ **Upfront Point Deduction** - Points deducted immediately to prevent double-spending  
 ✅ **Atomic Transfers** - Either both wallets update or neither  
-✅ **Two-Phase Transfer** - Immediate deduction + completion transfer
+✅ **Two-Phase Transfer** - Immediate deduction + completion transfer  
+✅ **No Double Deduction** - Points only move once from creator to requester
 
 ## 📋 Complete Merchant-to-Merchant Flow Summary
 
@@ -1103,14 +1106,15 @@ The system integrates with the existing wallet system:
 
 1. **Merchant A** creates a deal with 500 points → **Points immediately deducted from A's wallet**
 2. **Merchant B** discovers the deal and requests to work on it → **Notification sent to A**
-3. **Merchant A** accepts the request → **All other requests auto-rejected, deal confirmed**
+3. **Merchant A** accepts the request → **All other requests auto-rejected, deal confirmed, points marked as used**
 4. **Merchant B** completes the work → **Either merchant can trigger completion**
-5. **System** transfers 500 points from A to B → **Deal marked as completed**
+5. **System** transfers 500 points from A to B → **No additional deduction, deal marked as completed**
 
 ### Key Points to Remember
 
 - **No Double Deduction**: Points are deducted once (at creation) and transferred once (at completion)
 - **Immediate Commitment**: Points are locked when deal is created
+- **No Additional Deduction**: Points just move from locked state to requester on completion
 - **Atomic Operations**: All transfers are atomic and secure
 - **Complete Tracking**: Every transaction is recorded and auditable
 - **Fixed System**: No negotiation - take it or leave it
@@ -1125,34 +1129,56 @@ The system integrates with the existing wallet system:
 - **Provides Transparency**: Complete audit trail for all transactions
 - **Scales Efficiently**: Fixed point system reduces complexity
 
-## 🔧 Filter-Based Actions
+## 🔧 Current API Structure
 
-The merchant deal system now uses **filter-based actions** for a cleaner API design:
+The merchant deal system uses a **clean API design** with separate endpoints for different functionalities:
 
-### How It Works
+### API Endpoint Structure
 
-Instead of separate endpoints for accept/reject actions, you use query parameters:
+#### Deal Management
+
+- **Merchant Deals**: `/api/custom_auth/v1/merchant-deals/` - CRUD operations for deals
+- **Deal Discovery**: `/api/custom_auth/v1/deal-discovery/` - Discover deals from other merchants
+
+#### Request Management
+
+- **Deal Requests**: `/api/custom_auth/v1/merchant-deal-requests/` - Requests made BY current merchant
+- **Received Requests**: `/api/custom_auth/v1/received-requests/` - Requests received FOR current merchant's deals
+
+#### Deal Processing
+
+- **Deal Confirmations**: `/api/custom_auth/v1/deal-confirmations/` - Confirmed deals and completion
+- **Notifications**: `/api/custom_auth/v1/merchant-notifications/` - Merchant notifications
+- **Statistics**: `/api/custom_auth/v1/deal-stats/` - Deal statistics
+
+### Filter-Based Actions
+
+The system uses **filter-based actions** for request management:
+
+#### How It Works
+
+Use query parameters to perform actions on requests:
 
 ```http
-# List requests
-GET /api/custom_auth/v1/merchant-deal-requests/
+# List received requests
+GET /api/custom_auth/v1/received-requests/
 
-# Accept request ID 123
-GET /api/custom_auth/v1/merchant-deal-requests/?action=accept&request_id=123
+# Accept request ID 123 (auto-rejects others for same deal)
+GET /api/custom_auth/v1/received-requests/?action=accept&request_id=123
 
 # Reject request ID 456
-GET /api/custom_auth/v1/merchant-deal-requests/?action=reject&request_id=456
+GET /api/custom_auth/v1/received-requests/?action=reject&request_id=456
 ```
 
-### Benefits
+#### Benefits
 
-- **Simplified API** - Only 2 main endpoints instead of 6
+- **Simplified API** - Actions integrated with listing
 - **Consistent Interface** - Same pattern for both request types
 - **Flexible Filtering** - Combine actions with other filters
-- **Auto-Rejection** - Still automatically rejects other requests when accepting one
+- **Auto-Rejection** - Automatically rejects other requests when accepting one
 - **Easy Integration** - Simple query parameter approach
 
-### Available Actions
+#### Available Actions
 
 - `action=accept` - Accept a specific request (auto-rejects others for same deal)
 - `action=reject` - Reject a specific request
