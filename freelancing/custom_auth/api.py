@@ -53,7 +53,7 @@ from freelancing.custom_auth.serializers import (BaseUserSerializer,
                                                 RazorpayCancelOrderSerializer, RazorpayTransactionSerializer, MerchantDealSerializer, 
                                                 MerchantDealCreateSerializer, MerchantDealRequestSerializer, 
                                                 MerchantDealConfirmationSerializer, MerchantNotificationSerializer,
-                                                MerchantPointsTransferSerializer, DealPointUsageSerializer, DealStatsSerializer,
+                                                MerchantPointsTransferSerializer, DealPointUsageSerializer,
                                                 SimpleVisitSerializer, StoreVoucherSerializer, CreateVoucherSerializer,
                                                 UseVoucherSerializer, TrackVisitSerializer
                                             )
@@ -1110,21 +1110,64 @@ class MerchantDealViewSet(viewsets.ModelViewSet):
         context['request'] = self.request
         return context
     
-    @action(detail=True, methods=['post'])
-    def activate(self, request, pk=None):
-        """Activate a deal"""
+    def destroy(self, request, *args, **kwargs):
+        """Delete a merchant deal"""
         deal = self.get_object()
-        deal.status = 'active'
-        deal.save()
-        return Response({'message': 'Deal activated successfully'})
-    
-    @action(detail=True, methods=['post'])
-    def deactivate(self, request, pk=None):
-        """Deactivate a deal"""
-        deal = self.get_object()
-        deal.status = 'inactive'
-        deal.save()
-        return Response({'message': 'Deal deactivated successfully'})
+        user = request.user
+        
+        # Only the deal creator can delete the deal
+        if not hasattr(user, 'merchant_profile') or deal.merchant != user.merchant_profile:
+            return Response(
+                {'error': 'You can only delete your own deals'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Check if deal has any pending requests
+        pending_requests = MerchantDealRequest.objects.filter(
+            deal=deal, 
+            status='pending'
+        ).count()
+        
+        if pending_requests > 0:
+            return Response(
+                {'error': f'Cannot delete deal with {pending_requests} pending requests. Please handle all requests first.'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if deal has any confirmed deals
+        confirmed_deals = MerchantDealConfirmation.objects.filter(
+            deal=deal,
+            status__in=['confirmed', 'completed']
+        ).count()
+        
+        if confirmed_deals > 0:
+            return Response(
+                {'error': f'Cannot delete deal with {confirmed_deals} confirmed/completed transactions. Deal is already in use.'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # If deal has unused points, refund them to merchant's wallet
+        if deal.points_remaining > 0:
+            try:
+                user.wallet.add_points(
+                    deal.points_remaining,
+                    f"Refund for deleted deal: {deal.title}",
+                    f"DEAL_DELETE_{deal.id}"
+                )
+            except Exception as e:
+                return Response(
+                    {'error': f'Failed to refund points: {str(e)}'}, 
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        
+        # Delete the deal
+        deal_title = deal.title
+        deal.delete()
+        
+        return Response(
+            {'message': f'Deal "{deal_title}" deleted successfully'}, 
+            status=status.HTTP_200_OK
+        )
     
     @action(detail=True, methods=['get'])
     def usage_history(self, request, pk=None):
@@ -1185,25 +1228,6 @@ class DealDiscoveryViewSet(viewsets.ReadOnlyModelViewSet):
         context['request'] = self.request
         return context
     
-    @action(detail=False, methods=['get'])
-    def by_points(self, request):
-        """Get deals filtered by specific point range"""
-        points = request.query_params.get('points')
-        if not points:
-            return Response({'error': 'Points parameter is required'}, status=400)
-        
-        try:
-            points = float(points)
-            queryset = self.get_queryset().filter(
-                points_offered__lte=points,
-                points_remaining__gte=points
-            )
-            serializer = self.get_serializer(queryset, many=True)
-            return Response(serializer.data)
-        except ValueError:
-            return Response({'error': 'Invalid points value'}, status=400)
-
-
 class MerchantDealRequestViewSet(viewsets.ModelViewSet):
     """
     ViewSet for merchant deal requests (requests made by current merchant)
@@ -1264,7 +1288,7 @@ class MerchantDealRequestViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Invalid action. Use "accept" or "reject"'}, status=400)
     
     def _accept_request(self, deal_request):
-        """Accept a deal request and automatically reject others for the same deal"""
+        """Accept a deal request, automatically reject others, and complete the deal with point transfer"""
         # Check if deal still has remaining points
         if deal_request.deal.points_remaining < deal_request.points_requested:
             return Response({'error': 'Deal does not have enough remaining points'}, status=400)
@@ -1298,33 +1322,76 @@ class MerchantDealRequestViewSet(viewsets.ModelViewSet):
         deal.points_used += deal.points_offered
         deal.save()
         
-        # Send notifications
-        # Notification to accepted merchant
-        MerchantNotification.objects.create(
-            merchant=deal_request.requesting_merchant,
-            notification_type='deal_accepted',
-            title='Deal Request Accepted!',
-            message=f'{deal_request.deal.merchant.business_name} accepted your deal request for {deal.points_offered} points',
-            deal=deal_request.deal,
-            action_url=f'/merchant/deal-confirmations/{confirmation.id}/'
-        )
-        
-        # Notifications to rejected merchants
-        for rejected_request in other_requests:
-            MerchantNotification.objects.create(
-                merchant=rejected_request.requesting_merchant,
-                notification_type='deal_rejected',
-                title='Deal Request Rejected',
-                message=f'{deal_request.deal.merchant.business_name} accepted another request for this deal',
-                deal=deal_request.deal
+        # Automatically complete the deal and transfer points
+        try:
+            # Create points transfer
+            transfer = MerchantPointsTransfer.objects.create(
+                confirmation=confirmation,
+                from_merchant=confirmation.merchant1,
+                to_merchant=confirmation.merchant2,
+                points_amount=confirmation.points_exchanged,
+                transfer_fee=Decimal('0.00'),  # No fees for now
+                net_amount=confirmation.points_exchanged,
+                transaction_id=f"TRF_{uuid.uuid4().hex[:8].upper()}"
             )
-        
-        return Response({
-            'message': 'Deal request accepted successfully',
-            'accepted_request_id': deal_request.id,
-            'rejected_requests_count': rejected_count,
-            'confirmation_id': confirmation.id
-        })
+            
+            # Complete the transfer
+            if transfer.complete_transfer():
+                confirmation.complete_deal()
+                
+                # Create deal point usage record
+                DealPointUsage.objects.create(
+                    deal=confirmation.deal,
+                    confirmation=confirmation,
+                    from_merchant=confirmation.merchant1,
+                    to_merchant=confirmation.merchant2,
+                    usage_type='exchange',
+                    points_used=confirmation.points_exchanged,
+                    usage_description=f"Point exchange between {confirmation.merchant1.business_name} and {confirmation.merchant2.business_name}"
+                )
+                
+                # Send notifications
+                # Notification to accepted merchant
+                MerchantNotification.objects.create(
+                    merchant=deal_request.requesting_merchant,
+                    notification_type='deal_accepted',
+                    title='Deal Request Accepted & Completed!',
+                    message=f'{deal_request.deal.merchant.business_name} accepted your deal request and transferred {deal.points_offered} points',
+                    deal=deal_request.deal
+                )
+                
+                # Notification to deal creator
+                MerchantNotification.objects.create(
+                    merchant=deal_request.deal.merchant,
+                    notification_type='points_transfer',
+                    title='Points Transfer Completed',
+                    message=f'{confirmation.points_exchanged} points transferred to {confirmation.merchant2.business_name}',
+                    deal=confirmation.deal
+                )
+                
+                # Notifications to rejected merchants
+                for rejected_request in other_requests:
+                    MerchantNotification.objects.create(
+                        merchant=rejected_request.requesting_merchant,
+                        notification_type='deal_rejected',
+                        title='Deal Request Rejected',
+                        message=f'{deal_request.deal.merchant.business_name} accepted another request for this deal',
+                        deal=deal_request.deal
+                    )
+                
+                return Response({
+                    'message': 'Deal request accepted and completed successfully with point transfer',
+                    'accepted_request_id': deal_request.id,
+                    'rejected_requests_count': rejected_count,
+                    'confirmation_id': confirmation.id,
+                    'transfer_id': transfer.id,
+                    'points_transferred': confirmation.points_exchanged
+                })
+            else:
+                return Response({'error': 'Points transfer failed'}, status=500)
+                
+        except Exception as e:
+            return Response({'error': f'Failed to complete deal: {str(e)}'}, status=500)
     
     def _reject_request(self, deal_request):
         """Reject a specific deal request"""
@@ -1493,7 +1560,7 @@ class MerchantReceivedRequestsViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Invalid action. Use "accept" or "reject"'}, status=400)
     
     def _accept_request(self, deal_request):
-        """Accept a deal request and automatically reject others for the same deal"""
+        """Accept a deal request, automatically reject others, and complete the deal with point transfer"""
         # Check if deal still has remaining points
         if deal_request.deal.points_remaining < deal_request.points_requested:
             return Response({'error': 'Deal does not have enough remaining points'}, status=400)
@@ -1527,33 +1594,76 @@ class MerchantReceivedRequestsViewSet(viewsets.ModelViewSet):
         deal.points_used += deal.points_offered
         deal.save()
         
-        # Send notifications
-        # Notification to accepted merchant
-        MerchantNotification.objects.create(
-            merchant=deal_request.requesting_merchant,
-            notification_type='deal_accepted',
-            title='Deal Request Accepted!',
-            message=f'{deal_request.deal.merchant.business_name} accepted your deal request for {deal.points_offered} points',
-            deal=deal_request.deal,
-            action_url=f'/merchant/deal-confirmations/{confirmation.id}/'
-        )
-        
-        # Notifications to rejected merchants
-        for rejected_request in other_requests:
-            MerchantNotification.objects.create(
-                merchant=rejected_request.requesting_merchant,
-                notification_type='deal_rejected',
-                title='Deal Request Rejected',
-                message=f'{deal_request.deal.merchant.business_name} accepted another request for this deal',
-                deal=deal_request.deal
+        # Automatically complete the deal and transfer points
+        try:
+            # Create points transfer
+            transfer = MerchantPointsTransfer.objects.create(
+                confirmation=confirmation,
+                from_merchant=confirmation.merchant1,
+                to_merchant=confirmation.merchant2,
+                points_amount=confirmation.points_exchanged,
+                transfer_fee=Decimal('0.00'),  # No fees for now
+                net_amount=confirmation.points_exchanged,
+                transaction_id=f"TRF_{uuid.uuid4().hex[:8].upper()}"
             )
-        
-        return Response({
-            'message': 'Deal request accepted successfully',
-            'accepted_request_id': deal_request.id,
-            'rejected_requests_count': rejected_count,
-            'confirmation_id': confirmation.id
-        })
+            
+            # Complete the transfer
+            if transfer.complete_transfer():
+                confirmation.complete_deal()
+                
+                # Create deal point usage record
+                DealPointUsage.objects.create(
+                    deal=confirmation.deal,
+                    confirmation=confirmation,
+                    from_merchant=confirmation.merchant1,
+                    to_merchant=confirmation.merchant2,
+                    usage_type='exchange',
+                    points_used=confirmation.points_exchanged,
+                    usage_description=f"Point exchange between {confirmation.merchant1.business_name} and {confirmation.merchant2.business_name}"
+                )
+                
+                # Send notifications
+                # Notification to accepted merchant
+                MerchantNotification.objects.create(
+                    merchant=deal_request.requesting_merchant,
+                    notification_type='deal_accepted',
+                    title='Deal Request Accepted & Completed!',
+                    message=f'{deal_request.deal.merchant.business_name} accepted your deal request and transferred {deal.points_offered} points',
+                    deal=deal_request.deal
+                )
+                
+                # Notification to deal creator
+                MerchantNotification.objects.create(
+                    merchant=deal_request.deal.merchant,
+                    notification_type='points_transfer',
+                    title='Points Transfer Completed',
+                    message=f'{confirmation.points_exchanged} points transferred to {confirmation.merchant2.business_name}',
+                    deal=confirmation.deal
+                )
+                
+                # Notifications to rejected merchants
+                for rejected_request in other_requests:
+                    MerchantNotification.objects.create(
+                        merchant=rejected_request.requesting_merchant,
+                        notification_type='deal_rejected',
+                        title='Deal Request Rejected',
+                        message=f'{deal_request.deal.merchant.business_name} accepted another request for this deal',
+                        deal=deal_request.deal
+                    )
+                
+                return Response({
+                    'message': 'Deal request accepted and completed successfully with point transfer',
+                    'accepted_request_id': deal_request.id,
+                    'rejected_requests_count': rejected_count,
+                    'confirmation_id': confirmation.id,
+                    'transfer_id': transfer.id,
+                    'points_transferred': confirmation.points_exchanged
+                })
+            else:
+                return Response({'error': 'Points transfer failed'}, status=500)
+                
+        except Exception as e:
+            return Response({'error': f'Failed to complete deal: {str(e)}'}, status=500)
     
     def _reject_request(self, deal_request):
         """Reject a specific deal request"""
@@ -1597,62 +1707,6 @@ class MerchantDealConfirmationViewSet(viewsets.ModelViewSet):
         context = super().get_serializer_context()
         context['request'] = self.request
         return context
-    
-    @action(detail=True, methods=['post'])
-    def complete(self, request, pk=None):
-        """Complete a deal and transfer points"""
-        confirmation = self.get_object()
-        user = request.user.merchant_profile
-        
-        if confirmation.status == 'confirmed' and (confirmation.merchant1 == user or confirmation.merchant2 == user):
-            # Create points transfer
-            transfer = MerchantPointsTransfer.objects.create(
-                confirmation=confirmation,
-                from_merchant=confirmation.merchant1,
-                to_merchant=confirmation.merchant2,
-                points_amount=confirmation.points_exchanged,
-                transfer_fee=Decimal('0.00'),  # No fees for now
-                net_amount=confirmation.points_exchanged,
-                transaction_id=f"TRF_{uuid.uuid4().hex[:8].upper()}"
-            )
-            
-            # Complete the transfer
-            if transfer.complete_transfer():
-                confirmation.complete_deal()
-                
-                # Create deal point usage record
-                DealPointUsage.objects.create(
-                    deal=confirmation.deal,
-                    confirmation=confirmation,
-                    from_merchant=confirmation.merchant1,
-                    to_merchant=confirmation.merchant2,
-                    usage_type='exchange',
-                    points_used=confirmation.points_exchanged,
-                    usage_description=f"Point exchange between {confirmation.merchant1.business_name} and {confirmation.merchant2.business_name}"
-                )
-                
-                # Send notifications
-                MerchantNotification.objects.create(
-                    merchant=confirmation.merchant1,
-                    notification_type='points_transfer',
-                    title='Points Transfer Completed',
-                    message=f'{confirmation.points_exchanged} points transferred to {confirmation.merchant2.business_name}',
-                    deal=confirmation.deal
-                )
-                
-                MerchantNotification.objects.create(
-                    merchant=confirmation.merchant2,
-                    notification_type='points_transfer',
-                    title='Points Received',
-                    message=f'You received {confirmation.points_exchanged} points from {confirmation.merchant1.business_name}',
-                    deal=confirmation.deal
-                )
-                
-                return Response({'message': 'Deal completed and points transferred successfully'})
-            else:
-                return Response({'error': 'Points transfer failed'}, status=500)
-        else:
-            return Response({'error': 'Cannot complete this deal'}, status=400)
     
     @action(detail=True, methods=['get'])
     def usage_history(self, request, pk=None):
@@ -1706,53 +1760,6 @@ class MerchantNotificationViewSet(viewsets.ModelViewSet):
             is_read=False
         ).count()
         return Response({'unread_count': count})
-
-
-class DealStatsViewSet(viewsets.ViewSet):
-    """
-    ViewSet for deal statistics
-    """
-    permission_classes = [IsAuthenticated]
-    
-    def list(self, request):
-        """Get overall deal statistics"""
-        user = request.user
-        if not hasattr(user, 'merchant_profile'):
-            return Response({'error': 'Merchant profile not found'}, status=404)
-        
-        merchant_profile = user.merchant_profile
-        
-        # Calculate statistics
-        total_deals = MerchantDeal.objects.filter(merchant=merchant_profile).count()
-        active_deals = MerchantDeal.objects.filter(merchant=merchant_profile, status='active').count()
-        total_requests = MerchantDealRequest.objects.filter(
-            Q(deal__merchant=merchant_profile) | Q(requesting_merchant=merchant_profile)
-        ).count()
-        successful_deals = MerchantDealConfirmation.objects.filter(
-            Q(merchant1=merchant_profile) | Q(merchant2=merchant_profile),
-            status='completed'
-        ).count()
-        
-        # Calculate total points offered and used
-        total_points_offered = MerchantDeal.objects.filter(
-            merchant=merchant_profile
-        ).aggregate(total=Sum('points_offered'))['total'] or Decimal('0.00')
-        
-        total_points_used = MerchantDeal.objects.filter(
-            merchant=merchant_profile
-        ).aggregate(total=Sum('points_used'))['total'] or Decimal('0.00')
-        
-        data = {
-            'total_deals': total_deals,
-            'active_deals': active_deals,
-            'total_requests': total_requests,
-            'successful_deals': successful_deals,
-            'total_points_offered': total_points_offered,
-            'total_points_used': total_points_used
-        }
-        
-        serializer = DealStatsSerializer(data)
-        return Response(serializer.data)
 
 
 # ===== SIMPLE VOUCHER SYSTEM APIs =====

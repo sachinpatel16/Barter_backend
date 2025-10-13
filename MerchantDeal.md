@@ -11,12 +11,13 @@ The Merchant Deal System provides functionality for merchant-to-merchant **fixed
 - **Deal Discovery**: Find deals from other merchants with merchant logos
 - **Automatic Point Transfer**: Seamless point exchange when deals are completed
 - **Location-Based Filtering**: Deals can be filtered by city and location
-- **Deal Management**: Create, update, activate, deactivate deals
+- **Deal Management**: Create, update, delete deals
 - **Real-time Notifications**: Instant notifications for deal activities
 - **Point Tracking**: Complete audit trail of point usage
 - **Merchant Logos**: Visual merchant identification in all API responses
 - **Upfront Point Deduction**: Points are deducted immediately when deal is created
 - **Filter-Based Actions**: Accept/reject requests using query parameters
+- **Deal Deletion**: Merchants can delete their deals with automatic point refunds
 
 ## 🏗️ System Architecture
 
@@ -204,35 +205,55 @@ GET /api/custom_auth/v1/merchant-deals/
 }
 ```
 
-#### Activate Deal
+#### Delete Deal
 
 ```http
-POST /api/custom_auth/v1/merchant-deals/{id}/activate/
+DELETE /api/custom_auth/v1/merchant-deals/{id}/
 ```
 
-**Description:** Activate a deal.
+**Description:** Delete a merchant deal with automatic point refunds.
 
-**Response:**
+**Authentication:** Required (JWT Token - Deal creator only)
+
+**Request Headers:**
+
+```
+Authorization: Bearer <jwt_token>
+```
+
+**Important Notes:**
+
+- Only the deal creator can delete their own deals
+- Cannot delete deals with pending requests
+- Cannot delete deals with confirmed/completed transactions
+- Unused points are automatically refunded to merchant's wallet
+- Complete audit trail is maintained
+
+**Success Response:**
 
 ```json
 {
-  "message": "Deal activated successfully"
+  "message": "Deal \"Sample Deal\" deleted successfully"
 }
 ```
 
-#### Deactivate Deal
-
-```http
-POST /api/custom_auth/v1/merchant-deals/{id}/deactivate/
-```
-
-**Description:** Deactivate a deal.
-
-**Response:**
+**Error Responses:**
 
 ```json
 {
-  "message": "Deal deactivated successfully"
+  "error": "You can only delete your own deals"
+}
+```
+
+```json
+{
+  "error": "Cannot delete deal with 2 pending requests. Please handle all requests first."
+}
+```
+
+```json
+{
+  "error": "Cannot delete deal with 1 confirmed/completed transactions. Deal is already in use."
 }
 ```
 
@@ -270,20 +291,25 @@ GET /api/custom_auth/v1/merchant-deals/{id}/usage-history/
 GET /api/custom_auth/v1/deal-discovery/
 ```
 
-**Description:** Discover deals from other merchants.
+**Description:** Discover deals from other merchants with advanced filtering options.
+
+**Authentication:** Required (JWT Token - Merchant only)
 
 **Query Parameters:**
 
-- `category`: Filter by category ID
-- `points_offered`: Filter by points offered
+- `category_ids`: Filter by category IDs (comma-separated, e.g., "1,2,3")
+- `points_offered`: Filter by exact points offered
 - `merchant__city`: Filter by merchant city
-- `min_points`: Minimum points filter
-- `max_points`: Maximum points filter
+- `search`: Search in deal title, description, or merchant business name
+- `ordering`: Order results (e.g., "-create_time", "points_offered")
 
 **Response:**
 
 ```json
 {
+  "count": 15,
+  "next": "http://localhost:8000/api/custom_auth/v1/deal-discovery/?page=2",
+  "previous": null,
   "results": [
     {
       "id": 2,
@@ -291,40 +317,104 @@ GET /api/custom_auth/v1/deal-discovery/
       "merchant_name": "Delivery Co",
       "merchant_logo": "http://localhost:8000/media/merchant/logo/delivery_logo.jpg",
       "title": "Marketing Support",
+      "description": "Help with social media marketing and content creation",
       "points_offered": 300.0,
+      "points_used": 0.0,
       "points_remaining": 300.0,
+      "deal_value": 30.0,
+      "category": 1,
       "category_name": "Marketing",
-      "status": "active"
+      "status": "active",
+      "expiry_date": "2024-12-31T23:59:59Z",
+      "is_expired": false,
+      "preferred_cities": ["Mumbai", "Delhi"],
+      "preferred_categories": [1, 2],
+      "terms_conditions": "Must complete within 30 days",
+      "request_count": 0,
+      "confirmation_count": 0,
+      "create_time": "2024-01-15T10:30:00Z"
+    },
+    {
+      "id": 3,
+      "merchant": 3,
+      "merchant_name": "Tech Solutions",
+      "merchant_logo": "http://localhost:8000/media/merchant/logo/tech_logo.jpg",
+      "title": "Website Development",
+      "description": "Build a responsive website for small business",
+      "points_offered": 500.0,
+      "points_used": 0.0,
+      "points_remaining": 500.0,
+      "deal_value": 50.0,
+      "category": 2,
+      "category_name": "Technology",
+      "status": "active",
+      "expiry_date": null,
+      "is_expired": false,
+      "preferred_cities": [],
+      "preferred_categories": [],
+      "terms_conditions": "Must deliver within 2 weeks",
+      "request_count": 2,
+      "confirmation_count": 0,
+      "create_time": "2024-01-14T14:20:00Z"
     }
   ]
 }
 ```
 
-#### Get Deals by Points
+**Response Fields:**
+
+- `id`: Deal ID
+- `merchant`: Merchant profile ID
+- `merchant_name`: Business name of the merchant
+- `merchant_logo`: URL to merchant's logo image
+- `title`: Deal title
+- `description`: Detailed deal description
+- `points_offered`: Total points offered for this deal
+- `points_used`: Points already used from this deal
+- `points_remaining`: Available points remaining
+- `deal_value`: Monetary value (points_offered ÷ 10)
+- `category`: Category ID
+- `category_name`: Category name
+- `status`: Deal status (active, inactive, expired, completed, cancelled)
+- `expiry_date`: Deal expiry date (null if no expiry)
+- `is_expired`: Boolean indicating if deal is expired
+- `preferred_cities`: List of preferred cities for this deal
+- `preferred_categories`: List of preferred category IDs
+- `terms_conditions`: Terms and conditions for the deal
+- `request_count`: Number of requests received for this deal
+- `confirmation_count`: Number of confirmed deals
+- `create_time`: Deal creation timestamp
+
+**Filtering Examples:**
 
 ```http
-GET /api/custom_auth/v1/deal-discovery/by-points/?points=500
+# Filter by specific categories
+GET /api/custom_auth/v1/deal-discovery/?category_ids=1,2,3
+
+# Filter by city
+GET /api/custom_auth/v1/deal-discovery/?merchant__city=Mumbai
+
+# Filter by points range
+GET /api/custom_auth/v1/deal-discovery/?points_offered=500
+
+# Search in title, description, or merchant name
+GET /api/custom_auth/v1/deal-discovery/?search=marketing
+
+# Order by creation time (newest first)
+GET /api/custom_auth/v1/deal-discovery/?ordering=-create_time
+
+# Combine multiple filters
+GET /api/custom_auth/v1/deal-discovery/?category_ids=1,2&merchant__city=Delhi&search=website
 ```
 
-**Description:** Get deals filtered by specific point range.
+**Business Logic:**
 
-**Response:**
-
-```json
-{
-  "results": [
-    {
-      "id": 1,
-      "merchant": 1,
-      "merchant_name": "Pizza Palace",
-      "merchant_logo": "http://localhost:8000/media/merchant/logo/pizza_logo.jpg",
-      "title": "Food Delivery Service",
-      "points_offered": 500.0,
-      "points_remaining": 500.0
-    }
-  ]
-}
-```
+- Only shows deals from **other merchants** (excludes current merchant's deals)
+- Only shows **active** deals with **remaining points** > 0
+- Only shows deals from **active merchants**
+- Results are ordered by creation time (newest first) by default
+- Supports pagination for large result sets
+- Merchant logos are included for visual identification
 
 ### Deal Requests
 
@@ -349,8 +439,7 @@ Content-Type: application/json
 
 ```json
 {
-  "deal": 1,
-  "message": "I can provide delivery services in Mumbai"
+  "deal": 1
 }
 ```
 
@@ -376,7 +465,6 @@ Content-Type: application/json
   "deal_merchant_logo": "http://localhost:8000/media/merchant/logo/pizza_logo.jpg",
   "status": "pending",
   "points_requested": 500.0,
-  "message": "I can provide delivery services in Mumbai",
   "request_time": "2024-01-01T10:00:00Z"
 }
 ```
@@ -413,7 +501,6 @@ GET /api/custom_auth/v1/merchant-deal-requests/
       "deal_merchant_logo": "http://localhost:8000/media/merchant/logo/pizza_logo.jpg",
       "status": "pending",
       "points_requested": 500.0,
-      "message": "I can provide delivery services",
       "request_time": "2024-01-01T10:00:00Z"
     }
   ]
@@ -477,7 +564,6 @@ GET /api/custom_auth/v1/received-requests/?deal__category=1&status=pending
       "deal_merchant_logo": "http://localhost:8000/media/merchant/logo/pizza_logo.jpg",
       "status": "pending",
       "points_requested": 500.0,
-      "message": "I can provide delivery services",
       "request_time": "2024-01-01T10:00:00Z"
     }
   ]
@@ -599,8 +685,8 @@ GET /api/custom_auth/v1/merchant-notifications/
     {
       "id": 1,
       "notification_type": "deal_request",
-      "title": "New Deal Request!",
-      "message": "Delivery Co requested your deal 'Food Delivery Service' for 500 points",
+      "title": "Deal Request Accepted & Completed!",
+      "message": "Delivery Co accepted your deal request and transferred 500 points",
       "is_read": false,
       "create_time": "2024-01-01T10:00:00Z"
     }
@@ -656,30 +742,46 @@ GET /api/custom_auth/v1/merchant-notifications/unread_count/
 }
 ```
 
-### Deal Statistics
+## 🔄 Updated Merchant-to-Merchant Deal Flow
 
-#### Get Deal Stats
+### Current Implementation Flow
 
-```http
-GET /api/custom_auth/v1/deal-stats/
-```
+The merchant deal system now operates with a **single deduction model** where points are deducted once at creation and automatically transferred upon acceptance:
 
-**Description:** Get overall deal statistics for the merchant.
+#### **Phase 1: Deal Creation**
 
-**Response:**
+1. **Merchant A** creates a deal with 500 points
+2. **Points are immediately deducted** from Merchant A's wallet (500 points)
+3. Deal status becomes 'active' with points locked
+4. Deal is visible to other merchants for discovery
 
-```json
-{
-  "total_deals": 10,
-  "active_deals": 5,
-  "total_requests": 15,
-  "successful_deals": 8,
-  "total_points_offered": 5000.0,
-  "total_points_used": 3000.0
-}
-```
+#### **Phase 2: Deal Request & Acceptance (Automatic Completion)**
 
-## 🔄 Business Logic
+5. **Merchant B** discovers the deal and requests to work on it
+6. **Merchant A** accepts the request
+7. All other pending requests for the same deal are automatically rejected
+8. Deal confirmation is created with status 'confirmed'
+9. **Points are automatically transferred** from Merchant A to Merchant B
+10. Deal confirmation status becomes 'completed'
+11. Both merchants receive notifications about the completed transfer
+12. Deal points are marked as used and transferred
+13. Complete audit trail created
+
+### **Final Point Distribution:**
+
+- **Merchant A**: 0 points (500 deducted at deal creation)
+- **Merchant B**: 700 points (200 original + 500 received from deal)
+- **Total System Points**: 700 points (500 points effectively "consumed" by the deal)
+
+### **Key Differences from Previous Documentation:**
+
+- ❌ **Removed**: Activate/Deactivate deal functionality
+- ❌ **Removed**: Deal statistics API
+- ❌ **Removed**: Manual deal completion API
+- ✅ **Added**: Deal deletion with automatic point refunds
+- ✅ **Updated**: Single deduction system with automatic transfer
+- ✅ **Enhanced**: Automatic deal completion upon acceptance
+- ✅ **Enhanced**: Comprehensive error handling for all operations
 
 ### Fixed Point Deal System
 
@@ -705,14 +807,11 @@ graph TD
     G --> H[Merchant A Reviews]
 
     H --> I{Accept/Reject?}
-    I -->|Accept| J[Auto-reject others<br/>Points marked as used]
+    I -->|Accept| J[Auto-reject others<br/>Points automatically transferred]
     I -->|Reject| K[Request Rejected]
 
-    J --> L[Deal Confirmed<br/>Points still locked]
-    L --> M[Merchant B Works]
-    M --> N[Complete Deal]
-    N --> O[Points Transfer: A→B<br/>No additional deduction]
-    O --> P[Final State:<br/>A: 500 points<br/>B: 700 points]
+    J --> L[Deal Completed<br/>Points transferred A→B]
+    L --> M[Final State:<br/>A: 0 points<br/>B: 700 points]
 
     K --> Q[End: No transfer]
 ```
@@ -752,32 +851,15 @@ graph TD
    - Can accept or reject the request
    - Only one request can be accepted per deal
 
-6. **Accept Request (Auto-Rejection)**:
+6. **Accept Request (Automatic Completion)**:
    - When Merchant A accepts a request, all other pending requests for the same deal are automatically rejected
    - Deal confirmation is created with status 'confirmed'
-   - Deal points are marked as used (points_used += points_offered)
-   - Notifications sent to all involved merchants
-
-#### Phase 4: Deal Completion & Point Transfer
-
-7. **Work Completion**:
-
-   - Merchant B completes the work as per deal terms
-   - Either merchant can trigger deal completion
-
-8. **Point Transfer Execution**:
-
-   - System creates `MerchantPointsTransfer` record
-   - Points are **transferred from Merchant A to Merchant B**
-   - **No additional deduction** - points move from locked state to requester
-   - Transfer includes transaction ID and audit trail
-   - Both wallets are updated atomically
-
-9. **Deal Finalization**:
-   - Deal status updated to 'completed'
+   - **Points are automatically transferred** from Merchant A to Merchant B
+   - Deal confirmation status becomes 'completed'
+   - `MerchantPointsTransfer` record created with transaction ID
    - `DealPointUsage` record created for audit
-   - Notifications sent to both merchants
-   - Transaction history updated
+   - Notifications sent to all involved merchants
+   - Complete audit trail created
 
 ### Detailed Point Flow
 
@@ -793,25 +875,22 @@ graph TD
    Merchant A Wallet: 500 points (500 deducted)
    Deal Status: Active with 500 points locked
 
-3. Deal Request & Acceptance:
+3. Deal Request & Acceptance (Automatic Transfer):
    Merchant B requests deal
    Merchant A accepts request
-   Deal Status: Confirmed (points still locked)
-
-4. Deal Completion:
-   Points transferred from Merchant A to Merchant B
-   Merchant A Wallet: 500 points (no change - already deducted)
-   Merchant B Wallet: 700 points (+500 received)
+   Points automatically transferred from A to B
+   Merchant A Wallet: 0 points (500 transferred)
+   Merchant B Wallet: 700 points (200 + 500 received)
    Deal Status: Completed
-   **Note**: No additional deduction - points just move from locked state to requester
+   **Note**: Single transfer occurs - points move from A to B upon acceptance
 ```
 
 #### Key Points:
 
-- **Points are deducted upfront** when deal is created (not when completed)
-- **Points are locked** in the deal until completion or expiry
-- **No double deduction** - points only move once (from creator to requester)
-- **No additional deduction on completion** - points just transfer from locked state
+- **Points are deducted upfront** when deal is created
+- **Points are locked** in the deal until acceptance
+- **Single transfer occurs** - points transferred from creator to requester upon acceptance
+- **Automatic completion** - no manual completion step required
 - **Atomic transfers** - either both wallets update or neither
 - **Complete audit trail** - every transaction is tracked
 - **Automatic notifications** - all parties are informed of status changes
@@ -916,6 +995,38 @@ graph TD
 {
   "error": "Deal request already exists",
   "status": 409
+}
+```
+
+#### Deal Deletion Errors
+
+```json
+{
+  "error": "You can only delete your own deals",
+  "status": 403
+}
+```
+
+```json
+{
+  "error": "Cannot delete deal with 2 pending requests. Please handle all requests first.",
+  "status": 400
+}
+```
+
+```json
+{
+  "error": "Cannot delete deal with 1 confirmed/completed transactions. Deal is already in use.",
+  "status": 400
+}
+```
+
+#### 500 Internal Server Error
+
+```json
+{
+  "error": "Failed to refund points: Database connection timeout",
+  "status": 500
 }
 ```
 
@@ -1044,14 +1155,13 @@ The system integrates with the existing wallet system:
 - `POST /api/custom_auth/v1/merchant-deals/` - Create new deal
 - `GET /api/custom_auth/v1/merchant-deals/{id}/` - Get deal details
 - `PUT /api/custom_auth/v1/merchant-deals/{id}/` - Update deal
-- `POST /api/custom_auth/v1/merchant-deals/{id}/activate/` - Activate deal
-- `POST /api/custom_auth/v1/merchant-deals/{id}/deactivate/` - Deactivate deal
+- `PATCH /api/custom_auth/v1/merchant-deals/{id}/` - Partial update deal
+- `DELETE /api/custom_auth/v1/merchant-deals/{id}/` - Delete deal (with point refunds)
 - `GET /api/custom_auth/v1/merchant-deals/{id}/usage_history/` - Get usage history
 
 ### Deal Discovery
 
 - `GET /api/custom_auth/v1/deal-discovery/` - Discover available deals
-- `GET /api/custom_auth/v1/deal-discovery/by_points/` - Filter by point range
 
 ### Deal Requests
 
@@ -1064,11 +1174,17 @@ The system integrates with the existing wallet system:
 - `GET /api/custom_auth/v1/received-requests/?action=accept&request_id={id}` - Accept request (auto-rejects others)
 - `GET /api/custom_auth/v1/received-requests/?action=reject&request_id={id}` - Reject request
 
+### Deal Request Actions (Alternative Methods)
+
+- `POST /api/custom_auth/v1/merchant-deal-requests/{id}/accept/` - Accept deal request
+- `POST /api/custom_auth/v1/merchant-deal-requests/{id}/reject/` - Reject deal request
+
 ### Deal Confirmations
 
 - `GET /api/custom_auth/v1/deal-confirmations/` - List confirmations
-- `POST /api/custom_auth/v1/deal-confirmations/{id}/complete/` - Complete deal
 - `GET /api/custom_auth/v1/deal-confirmations/{id}/usage_history/` - Get usage history
+
+**Note:** Deal confirmations are automatically created and completed when a deal request is accepted. No separate completion step is required.
 
 ### Notifications
 
@@ -1076,10 +1192,6 @@ The system integrates with the existing wallet system:
 - `POST /api/custom_auth/v1/merchant-notifications/{id}/mark_read/` - Mark as read
 - `POST /api/custom_auth/v1/merchant-notifications/mark_all_read/` - Mark all as read
 - `GET /api/custom_auth/v1/merchant-notifications/unread_count/` - Get unread count
-
-### Statistics
-
-- `GET /api/custom_auth/v1/deal-stats/` - Get deal statistics
 
 ## 🎯 Key Features Summary
 
@@ -1097,8 +1209,9 @@ The system integrates with the existing wallet system:
 ✅ **Security** - JWT authentication and data validation  
 ✅ **Upfront Point Deduction** - Points deducted immediately to prevent double-spending  
 ✅ **Atomic Transfers** - Either both wallets update or neither  
-✅ **Two-Phase Transfer** - Immediate deduction + completion transfer  
-✅ **No Double Deduction** - Points only move once from creator to requester
+✅ **Single Transfer System** - Points transferred automatically upon acceptance  
+✅ **Automatic Completion** - No manual completion step required  
+✅ **Deal Deletion** - Merchants can delete deals with automatic point refunds
 
 ## 📋 Complete Merchant-to-Merchant Flow Summary
 
@@ -1106,19 +1219,19 @@ The system integrates with the existing wallet system:
 
 1. **Merchant A** creates a deal with 500 points → **Points immediately deducted from A's wallet**
 2. **Merchant B** discovers the deal and requests to work on it → **Notification sent to A**
-3. **Merchant A** accepts the request → **All other requests auto-rejected, deal confirmed, points marked as used**
-4. **Merchant B** completes the work → **Either merchant can trigger completion**
-5. **System** transfers 500 points from A to B → **No additional deduction, deal marked as completed**
+3. **Merchant A** accepts the request → **All other requests auto-rejected, points automatically transferred from A to B, deal completed**
 
 ### Key Points to Remember
 
-- **No Double Deduction**: Points are deducted once (at creation) and transferred once (at completion)
+- **Single Transfer System**: Points are deducted at creation and transferred upon acceptance
 - **Immediate Commitment**: Points are locked when deal is created
-- **No Additional Deduction**: Points just move from locked state to requester on completion
+- **Automatic Transfer on Acceptance**: Points are transferred from creator to requester upon acceptance
 - **Atomic Operations**: All transfers are atomic and secure
 - **Complete Tracking**: Every transaction is recorded and auditable
 - **Fixed System**: No negotiation - take it or leave it
-- **Auto-Management**: System handles rejections and notifications automatically
+- **Auto-Management**: System handles rejections, transfers, and notifications automatically
+- **No Manual Completion**: Deal is completed automatically when accepted
+- **Deal Deletion**: Merchants can delete deals with automatic point refunds
 
 ### What Makes This System Special
 
@@ -1128,6 +1241,7 @@ The system integrates with the existing wallet system:
 - **Maintains Integrity**: Atomic transfers prevent data corruption
 - **Provides Transparency**: Complete audit trail for all transactions
 - **Scales Efficiently**: Fixed point system reduces complexity
+- **Flexible Deal Management**: Merchants can delete deals with automatic refunds
 
 ## 🔧 Current API Structure
 
@@ -1149,7 +1263,6 @@ The merchant deal system uses a **clean API design** with separate endpoints for
 
 - **Deal Confirmations**: `/api/custom_auth/v1/deal-confirmations/` - Confirmed deals and completion
 - **Notifications**: `/api/custom_auth/v1/merchant-notifications/` - Merchant notifications
-- **Statistics**: `/api/custom_auth/v1/deal-stats/` - Deal statistics
 
 ### Filter-Based Actions
 
@@ -1168,6 +1281,10 @@ GET /api/custom_auth/v1/received-requests/?action=accept&request_id=123
 
 # Reject request ID 456
 GET /api/custom_auth/v1/received-requests/?action=reject&request_id=456
+
+# Alternative: POST endpoints for accept/reject
+POST /api/custom_auth/v1/merchant-deal-requests/123/accept/
+POST /api/custom_auth/v1/merchant-deal-requests/456/reject/
 ```
 
 #### Benefits
@@ -1180,8 +1297,60 @@ GET /api/custom_auth/v1/received-requests/?action=reject&request_id=456
 
 #### Available Actions
 
+**Filter-Based Actions (Recommended):**
+
 - `action=accept` - Accept a specific request (auto-rejects others for same deal)
 - `action=reject` - Reject a specific request
 - `status=pending` - Filter by pending requests
 - `deal__category=1` - Filter by deal category
 - `points_requested=500` - Filter by points requested
+
+**Alternative POST Endpoints:**
+
+- `POST /api/custom_auth/v1/merchant-deal-requests/{id}/accept/` - Accept request
+- `POST /api/custom_auth/v1/merchant-deal-requests/{id}/reject/` - Reject request
+
+#### Two Methods for Accept/Reject
+
+**Method 1: Filter-Based Actions (Recommended)**
+
+```http
+# Accept request
+GET /api/custom_auth/v1/received-requests/?action=accept&request_id=123
+
+# Reject request
+GET /api/custom_auth/v1/received-requests/?action=reject&request_id=123
+```
+
+**Method 2: POST Endpoints**
+
+```http
+# Accept request
+POST /api/custom_auth/v1/merchant-deal-requests/123/accept/
+
+# Reject request
+POST /api/custom_auth/v1/merchant-deal-requests/123/reject/
+```
+
+**Response Examples:**
+
+**Accept Response:**
+
+```json
+{
+  "message": "Deal request accepted and completed successfully with point transfer",
+  "accepted_request_id": 123,
+  "rejected_requests_count": 2,
+  "confirmation_id": 456,
+  "transfer_id": 789,
+  "points_transferred": 500
+}
+```
+
+**Reject Response:**
+
+```json
+{
+  "message": "Deal request rejected successfully"
+}
+```

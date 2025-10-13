@@ -609,7 +609,7 @@ class MerchantDealRequestSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'requesting_merchant', 'requesting_merchant_name', 'requesting_merchant_logo',
             'deal', 'deal_title', 'deal_merchant', 'deal_merchant_logo', 'status', 
-            'request_time', 'message', 'points_requested'
+            'request_time', 'points_requested'
         ]
         read_only_fields = ['requesting_merchant', 'request_time']
     
@@ -740,18 +740,6 @@ class DealPointUsageSerializer(serializers.ModelSerializer):
             'usage_description', 'transaction_id', 'create_time'
         ]
         read_only_fields = ['transaction_id', 'create_time']
-
-
-class DealStatsSerializer(serializers.Serializer):
-    """Serializer for deal statistics"""
-    total_deals = serializers.IntegerField()
-    active_deals = serializers.IntegerField()
-    total_requests = serializers.IntegerField()
-    successful_deals = serializers.IntegerField()
-    total_points_offered = serializers.DecimalField(max_digits=12, decimal_places=2)
-    total_points_used = serializers.DecimalField(max_digits=12, decimal_places=2)
-
-
 
 
 # ===== SIMPLE VOUCHER SYSTEM SERIALIZERS =====
