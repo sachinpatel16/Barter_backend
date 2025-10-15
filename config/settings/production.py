@@ -10,7 +10,7 @@ CSRF_TRUSTED_ORIGINS = [
     'https://*.kinsta.app',
     'https://*.sevalla.app',
     'https://bartrlatest-8l446.sevalla.app',
-    # 'https://api.bartr.club',
+    'https://api.bartr.club',
     # 'https://5daa0dc5b024.ngrok-free.app'
 ]
 

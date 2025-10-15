@@ -2050,10 +2050,17 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"], url_path="test-meta-whatsapp-send")
     def test_meta_whatsapp_send(self, request):
-        """Test Meta WhatsApp message sending using Facebook Business API"""
+        """Test Meta WhatsApp template message sending using Facebook Business API.
+
+        Accepts:
+        - phone_number: recipient number
+        - template_name: optional, defaults to "hello_world"
+        - language_code: optional, defaults to "en_US"
+        """
         try:
             phone_number = request.data.get('phone_number')
-            test_message = request.data.get('message', 'Test message from Bartr via Meta WhatsApp')
+            template_name = request.data.get('template_name') or 'hello_world'
+            language_code = request.data.get('language_code') or 'en_US'
             
             if not phone_number:
                 return Response(
@@ -2069,7 +2076,7 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Test sending Meta WhatsApp message
+            # Send Meta WhatsApp template message
             from django.conf import settings
             import requests
             
@@ -2093,39 +2100,42 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
                 'Content-Type': 'application/json'
             }
             
-            # Prepare message payload
+            # Prepare template payload (mirrors a.py logic)
             payload = {
                 "messaging_product": "whatsapp",
                 "to": formatted_phone,
-                "type": "text",
-                "text": {
-                    "body": test_message
+                "type": "template",
+                "template": {
+                    "name": template_name,
+                    "language": {"code": language_code}
                 }
             }
             
             # Send message via Meta WhatsApp Business API
             response = requests.post(url, headers=headers, json=payload, timeout=30)
             
-            if response.status_code == 200:
-                result = response.json()
+            if 200 <= response.status_code < 300:
+                result = response.json() if response.content else {}
                 message_id = result.get('messages', [{}])[0].get('id', 'unknown')
                 return Response({
-                    "message": "Meta WhatsApp test message sent successfully",
+                    "message": "Meta WhatsApp template message sent successfully",
                     "phone_number": formatted_phone,
                     "message_id": message_id,
-                    "status": "sent"
+                    "status": "sent",
+                    "template": template_name,
+                    "language_code": language_code
                 })
             else:
                 error_data = response.json() if response.content else {}
                 return Response({
-                    "error": "Failed to send Meta WhatsApp test message",
+                    "error": "Failed to send Meta WhatsApp template message",
                     "status_code": response.status_code,
                     "error_details": error_data
                 }, status=status.HTTP_400_BAD_REQUEST)
             
         except Exception as e:
             return Response(
-                {"error": f"Failed to send Meta WhatsApp test message: {str(e)}"},
+                {"error": f"Failed to send Meta WhatsApp template message: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
