@@ -422,7 +422,7 @@ class VoucherViewSet(viewsets.ModelViewSet):
 
     def send_whatsapp_gift_card(self, phone_number, voucher, claim_reference):
         """
-        Send gift card voucher via WhatsApp API with claim reference using Twilio.
+        Send gift card voucher via WhatsApp API with claim reference using Meta WhatsApp Business API.
         
         This method sends a WhatsApp message containing the gift card details
         and a unique claim reference that recipients can use to claim the gift card.
@@ -436,68 +436,132 @@ class VoucherViewSet(viewsets.ModelViewSet):
             bool: True if sent successfully, False otherwise
         """
         try:
-            from twilio.rest import Client
             from django.conf import settings
+            import requests
+            import json
             
-            # Format phone number for WhatsApp (ensure it starts with whatsapp:)
-            if not phone_number.startswith('whatsapp:'):
-                # Format phone number to include country code if not present
-                formatted_phone = self._format_phone_for_whatsapp(phone_number)
+            # Format phone number for Meta WhatsApp (remove whatsapp: prefix if present)
+            if phone_number.startswith('whatsapp:'):
+                formatted_phone = phone_number.replace('whatsapp:', '')
+            else:
+                formatted_phone = self._format_phone_for_meta_whatsapp(phone_number)
                 if not formatted_phone:
                     print(f"Invalid phone number format: {phone_number}")
                     return False
-                whatsapp_phone = f"whatsapp:{formatted_phone}"
-            else:
-                whatsapp_phone = phone_number
             
             # Create message with claim reference
             message_body = f"""🎁 *Gift Card: {voucher.title}*
 
-                {voucher.message}
+{voucher.message}
 
-                🏪 *Merchant:* {voucher.merchant.business_name}
-                📍 *Location:* {voucher.merchant.city}, {voucher.merchant.state}
+🏪 *Merchant:* {voucher.merchant.business_name}
+📍 *Location:* {voucher.merchant.city}, {voucher.merchant.state}
 
-                💳 *Voucher Type:* {voucher.voucher_type.name}
-                💰 *Value:* {self.get_voucher_value(voucher)}
+💳 *Voucher Type:* {voucher.voucher_type.name}
+💰 *Value:* {self.get_voucher_value(voucher)}
 
+🔑 *Claim Reference:* {claim_reference}
 
-                🔑 *Claim Reference:* {claim_reference}
+To claim this gift card:
+1. Visit: https://bartr.club/claim-gift-card/{claim_reference}
+2. Or show this reference to the merchant
 
-                To claim this gift card:
-                1. Visit: https://bartr.club/claim-gift-card/{claim_reference}
-                2. Or show this reference to the merchant
-
-                *This gift card can only be claimed once by the recipient.*
-            """
+*This gift card can only be claimed once by the recipient.*"""
             
-            # Initialize Twilio client
-            # client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            # Meta WhatsApp Business API configuration
+            phone_number_id = getattr(settings, 'META_WHATSAPP_PHONE_NUMBER_ID', None)
+            access_token = getattr(settings, 'META_WHATSAPP_ACCESS_TOKEN', None)
+            api_version = getattr(settings, 'META_WHATSAPP_API_VERSION', 'v18.0')
             
-            # # Send WhatsApp message
-            # message = client.messages.create(
-            #     from_=settings.TWILIO_WHATSAPP_FROM,
-            #     body=message_body,
-            #     to=whatsapp_phone
-            # )
-            account_sid = settings.TWILIO_ACCOUNT_SID
-            auth_token = settings.TWILIO_AUTH_TOKEN
-
-            client = Client(account_sid, auth_token)
-
-# Send WhatsApp message
-            message = client.messages.create(
-                from_="whatsapp:+14155238886",      # Twilio sandbox number
-                body=message_body,  # simple test message
-                to=whatsapp_phone        # your WhatsApp number (must be joined in sandbox)
-            )
+            if not phone_number_id or not access_token:
+                print("Meta WhatsApp configuration missing. Please check META_WHATSAPP_PHONE_NUMBER_ID and META_WHATSAPP_ACCESS_TOKEN settings.")
+                return False
             
-            print(f"WhatsApp message sent successfully to {whatsapp_phone}. Message SID: {message.sid}")
-            return True
+            # Meta WhatsApp Business API URL
+            url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
+            
+            # Prepare headers
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
+            }
+            
+            # Prepare message payload
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": formatted_phone,
+                "type": "text",
+                "text": {
+                    "body": message_body
+                }
+            }
+            
+            print(f"Sending Meta WhatsApp message to {formatted_phone}")
+            
+            # Send message via Meta WhatsApp Business API
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                message_id = result.get('messages', [{}])[0].get('id', 'unknown')
+                print(f"Meta WhatsApp message sent successfully to {formatted_phone}. Message ID: {message_id}")
+                return True
+            else:
+                error_data = response.json() if response.content else {}
+                print(f"Meta WhatsApp API error for {formatted_phone}: {response.status_code} - {error_data}")
+                return False
             
         except Exception as e:
-            print(f"Failed to send WhatsApp message to {phone_number}: {str(e)}")
+            print(f"Failed to send Meta WhatsApp message to {phone_number}: {str(e)}")
             return False
+
+    def _format_phone_for_meta_whatsapp(self, phone_number):
+        """
+        Format phone number for Meta WhatsApp Business API.
+        
+        Args:
+            phone_number (str): Phone number in various formats
+            
+        Returns:
+            str: Formatted phone number with country code, or None if invalid
+        """
+        try:
+            if not phone_number:
+                return None
+            
+            # Clean phone number (remove spaces, dashes, parentheses, +)
+            clean_phone = str(phone_number).strip().replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+            
+            # Remove + if present
+            if clean_phone.startswith('+'):
+                clean_phone = clean_phone[1:]
+            
+            # Handle different Indian phone number formats
+            if clean_phone.startswith('91') and len(clean_phone) == 12:
+                # Already has country code, return as is
+                return f"{clean_phone}"
+            elif clean_phone.startswith('0') and len(clean_phone) == 11:
+                # Remove leading 0 and add country code
+                clean_phone = clean_phone[1:]
+                if len(clean_phone) == 10:
+                    return f"91{clean_phone}"
+            elif len(clean_phone) == 10 and clean_phone.isdigit():
+                # 10 digit number, add country code
+                return f"91{clean_phone}"
+            elif len(clean_phone) == 11 and clean_phone.isdigit():
+                # 11 digit number, might be with country code but without +
+                if clean_phone.startswith('91'):
+                    return f"{clean_phone}"
+                else:
+                    return f"91{clean_phone[1:]}"
+            
+            # If none of the above patterns match, return None
+            print(f"Invalid phone number format for Meta WhatsApp: {phone_number} -> {clean_phone}")
+            return None
+            
+        except Exception as e:
+            print(f"Error formatting phone number for Meta WhatsApp {phone_number}: {str(e)}")
+            return None
 
     def _format_phone_for_whatsapp(self, phone_number):
         """
@@ -1981,6 +2045,87 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response(
                 {"error": f"Failed to test WhatsApp validation: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=["post"], url_path="test-meta-whatsapp-send")
+    def test_meta_whatsapp_send(self, request):
+        """Test Meta WhatsApp message sending using Facebook Business API"""
+        try:
+            phone_number = request.data.get('phone_number')
+            test_message = request.data.get('message', 'Test message from Bartr via Meta WhatsApp')
+            
+            if not phone_number:
+                return Response(
+                    {"error": "phone_number is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Format phone number for Meta WhatsApp
+            formatted_phone = self._format_phone_for_meta_whatsapp(phone_number)
+            if not formatted_phone:
+                return Response(
+                    {"error": "Invalid phone number format"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Test sending Meta WhatsApp message
+            from django.conf import settings
+            import requests
+            
+            # Meta WhatsApp Business API configuration
+            phone_number_id = getattr(settings, 'META_WHATSAPP_PHONE_NUMBER_ID', None)
+            access_token = getattr(settings, 'META_WHATSAPP_ACCESS_TOKEN', None)
+            api_version = getattr(settings, 'META_WHATSAPP_API_VERSION', 'v18.0')
+            
+            if not phone_number_id or not access_token:
+                return Response(
+                    {"error": "Meta WhatsApp configuration missing. Please check META_WHATSAPP_PHONE_NUMBER_ID and META_WHATSAPP_ACCESS_TOKEN settings."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Meta WhatsApp Business API URL
+            url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
+            
+            # Prepare headers
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
+            }
+            
+            # Prepare message payload
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": formatted_phone,
+                "type": "text",
+                "text": {
+                    "body": test_message
+                }
+            }
+            
+            # Send message via Meta WhatsApp Business API
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                message_id = result.get('messages', [{}])[0].get('id', 'unknown')
+                return Response({
+                    "message": "Meta WhatsApp test message sent successfully",
+                    "phone_number": formatted_phone,
+                    "message_id": message_id,
+                    "status": "sent"
+                })
+            else:
+                error_data = response.json() if response.content else {}
+                return Response({
+                    "error": "Failed to send Meta WhatsApp test message",
+                    "status_code": response.status_code,
+                    "error_details": error_data
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to send Meta WhatsApp test message: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

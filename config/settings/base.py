@@ -49,6 +49,13 @@ TWILIO_ACCOUNT_SID = env('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = env('TWILIO_AUTH_TOKEN')
 TWILIO_WHATSAPP_FROM = env('TWILIO_WHATSAPP_FROM', default='whatsapp:+14155238886')
 
+# Meta WhatsApp Business API Configuration
+# --------------------------------------------------------------------------
+META_WHATSAPP_PHONE_NUMBER_ID = env('META_WHATSAPP_PHONE_NUMBER_ID', default='')
+META_WHATSAPP_ACCESS_TOKEN = env('META_WHATSAPP_ACCESS_TOKEN', default='')
+META_WHATSAPP_API_VERSION = env('META_WHATSAPP_API_VERSION', default='v18.0')
+META_WHATSAPP_BUSINESS_ACCOUNT_ID = env('META_WHATSAPP_BUSINESS_ACCOUNT_ID', default='')
+
 # Application definition
 
 DJANGO_APPS = [
