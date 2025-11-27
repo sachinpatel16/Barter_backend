@@ -694,30 +694,30 @@ This gift card can only be claimed once by the recipient."""
             # AWS SNS configuration
             aws_access_key_id = getattr(settings, 'AWS_ACCESS_KEY_ID', None)
             aws_secret_access_key = getattr(settings, 'AWS_SECRET_ACCESS_KEY', None)
-            aws_region = getattr(settings, 'AWS_SNS_REGION', 'us-east-1')
+            aws_region = getattr(settings, 'AWS_SNS_REGION', 'ap-south-1')
             
             if not aws_access_key_id or not aws_secret_access_key:
                 print("AWS SNS configuration missing. Please check AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY settings.")
                 return False
             
-            # Initialize SNS client
-            sns_client = boto3.client(
-                'sns',
+            # Initialize SNS client (following reference pattern from new.py)
+            client = boto3.client(
+                "sns",
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
-                region_name=aws_region
+                region_name=aws_region,
             )
             
             print(f"Sending AWS SNS SMS to {formatted_phone}")
             
-            # Send SMS via AWS SNS
-            response = sns_client.publish(
+            # Send SMS via AWS SNS (following reference pattern)
+            response = client.publish(
                 PhoneNumber=formatted_phone,
                 Message=message_body,
                 MessageAttributes={
-                    'AWS.SNS.SMS.SMSType': {
-                        'DataType': 'String',
-                        'StringValue': 'Transactional'
+                    "AWS.SNS.SMS.SMSType": {
+                        "DataType": "String",
+                        "StringValue": "Transactional"
                     }
                 }
             )
@@ -2461,7 +2461,7 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
             
             aws_access_key_id = getattr(settings, 'AWS_ACCESS_KEY_ID', None)
             aws_secret_access_key = getattr(settings, 'AWS_SECRET_ACCESS_KEY', None)
-            aws_region = getattr(settings, 'AWS_SNS_REGION', 'us-east-1')
+            aws_region = getattr(settings, 'AWS_SNS_REGION', 'ap-south-1')
             
             if not aws_access_key_id or not aws_secret_access_key:
                 return Response(
@@ -2469,22 +2469,22 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Initialize SNS client
-            sns_client = boto3.client(
-                'sns',
+            # Initialize SNS client (following reference pattern from new.py)
+            client = boto3.client(
+                "sns",
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
-                region_name=aws_region
+                region_name=aws_region,
             )
             
-            # Send SMS via AWS SNS
-            response = sns_client.publish(
+            # Send SMS via AWS SNS (following reference pattern)
+            response = client.publish(
                 PhoneNumber=formatted_phone,
                 Message=test_message,
                 MessageAttributes={
-                    'AWS.SNS.SMS.SMSType': {
-                        'DataType': 'String',
-                        'StringValue': 'Transactional'
+                    "AWS.SNS.SMS.SMSType": {
+                        "DataType": "String",
+                        "StringValue": "Transactional"
                     }
                 }
             )
