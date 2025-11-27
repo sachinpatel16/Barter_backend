@@ -47,6 +47,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.db import IntegrityError, DatabaseError
 from decimal import Decimal, InvalidOperation
 import time
+import boto3
+from botocore.exceptions import ClientError, BotoCoreError
 
 from freelancing.voucher.models import Voucher, WhatsAppContact, Advertisement, UserVoucherRedemption, VoucherType, GiftCardShare
 from freelancing.voucher.serializers import (
@@ -258,36 +260,38 @@ class VoucherViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="share-gift-card", permission_classes=[permissions.AllowAny])
     def share_gift_card(self, request, pk=None):
         """
-        Share a gift card voucher via WhatsApp to multiple contacts.
+        Share a gift card voucher via WhatsApp or SMS to multiple contacts.
         
-        This endpoint allows users and merchants to share gift card vouchers with their WhatsApp
-        contacts. It creates individual share records for each recipient, allowing
+        This endpoint allows users and merchants to share gift card vouchers with their contacts
+        via WhatsApp or SMS. It creates individual share records for each recipient, allowing
         them to claim and use the gift card independently.
         
         For Merchants: Can share their own created gift cards directly
         For Users: Must have purchased the gift card before sharing
         
         Args:
-            request: HTTP request object containing phone numbers
+            request: HTTP request object containing phone numbers and method
             pk: Primary key of the gift card voucher to share
             
         Request Body:
             {
-                "phone_numbers": ["+919876543210", "+919876543211"]
+                "phone_numbers": ["+919876543210", "+919876543211"],
+                "method": "whatsapp" or "sms" (default: "whatsapp")
             }
             
         Returns:
             Response: Success message with count of successful shares and failed numbers
             
         Raises:
-            400: If voucher is not a gift card or no valid WhatsApp contacts found
+            400: If voucher is not a gift card or no valid contacts found
             500: If sharing process fails
             
         Example Response:
         {
-            "message": "Gift card shared successfully to 3 contacts",
+            "message": "Gift card shared successfully to 3 contacts via SMS",
             "success_count": 3,
             "failed_numbers": ["+919876543212"],
+            "method": "sms",
             "shares_created": [
                 {
                     "phone_number": "+919876543210",
@@ -311,18 +315,46 @@ class VoucherViewSet(viewsets.ModelViewSet):
             serializer.is_valid(raise_exception=True)
            
             phone_numbers = serializer.validated_data.get('phone_numbers', [])
+            method = request.data.get('method', 'whatsapp').lower()  # Default to whatsapp
            
-            # Get user's WhatsApp contacts
-            user_contacts = WhatsAppContact.objects.filter(
-                user=request.user,
-                phone_number__in=phone_numbers,
-                is_on_whatsapp=True
-            )
-           
-            if not user_contacts.exists():
+            # Validate method
+            if method not in ['whatsapp', 'sms']:
                 return Response(
-                    {"error": "No valid WhatsApp contacts found"},
+                    {"error": "Method must be either 'whatsapp' or 'sms'"},
                     status=status.HTTP_400_BAD_REQUEST
+                )
+           
+            # Get user's contacts based on method
+            if method == 'whatsapp':
+                user_contacts = WhatsAppContact.objects.filter(
+                    user=request.user,
+                    phone_number__in=phone_numbers,
+                    is_on_whatsapp=True
+                )
+                if not user_contacts.exists():
+                    return Response(
+                        {"error": "No valid WhatsApp contacts found"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:  # SMS
+                # For SMS, we can use any phone number (no WhatsApp requirement)
+                user_contacts = WhatsAppContact.objects.filter(
+                    user=request.user,
+                    phone_number__in=phone_numbers
+                )
+                # If contacts don't exist, create them for SMS
+                existing_phones = set(user_contacts.values_list('phone_number', flat=True))
+                for phone in phone_numbers:
+                    if phone not in existing_phones:
+                        WhatsAppContact.objects.create(
+                            user=request.user,
+                            phone_number=phone,
+                            name=phone,  # Default name
+                            is_on_whatsapp=False
+                        )
+                user_contacts = WhatsAppContact.objects.filter(
+                    user=request.user,
+                    phone_number__in=phone_numbers
                 )
            
             # Get or create the user's voucher redemption record
@@ -370,7 +402,7 @@ class VoucherViewSet(viewsets.ModelViewSet):
                         recipient_phone=contact.phone_number,
                         defaults={
                             'recipient_name': contact.name,
-                            'shared_via': 'whatsapp'
+                            'shared_via': method
                         }
                     )
                     
@@ -394,22 +426,27 @@ class VoucherViewSet(viewsets.ModelViewSet):
                 except Exception as e:
                     failed_numbers.append(contact.phone_number)
            
-            # Send gift card via WhatsApp API
+            # Send gift card via WhatsApp or SMS API
             for share in shares_created:
                 try:
-                    # WhatsApp API call (you'll need to implement this based on your WhatsApp provider)
-                    success = self.send_whatsapp_gift_card(share['phone_number'], voucher, share['claim_reference'])
+                    if method == 'whatsapp':
+                        success = self.send_whatsapp_gift_card(share['phone_number'], voucher, share['claim_reference'])
+                    else:  # SMS
+                        success = self.send_sns_sms(share['phone_number'], voucher, share['claim_reference'])
+                    
                     if not success:
                         failed_numbers.append(share['phone_number'])
                         success_count -= 1
                 except Exception as e:
+                    print(f"Failed to send {method} message to {share['phone_number']}: {str(e)}")
                     failed_numbers.append(share['phone_number'])
                     success_count -= 1
            
             return Response({
-                "message": f"Gift card shared successfully to {success_count} contacts",
+                "message": f"Gift card shared successfully to {success_count} contacts via {method.upper()}",
                 "success_count": success_count,
                 "failed_numbers": failed_numbers,
+                "method": method,
                 "shares_created": shares_created,
                 "note": "Each recipient can claim and use the gift card independently"
             })
@@ -609,6 +646,147 @@ To claim this gift card:
             
         except Exception as e:
             print(f"Error formatting phone number for WhatsApp {phone_number}: {str(e)}")
+            return None
+
+    def send_sns_sms(self, phone_number, voucher, claim_reference):
+        """
+        Send gift card voucher via AWS SNS SMS with claim reference.
+        
+        This method sends an SMS message containing the gift card details
+        and a unique claim reference that recipients can use to claim the gift card.
+        
+        Args:
+            phone_number (str): Recipient's phone number
+            voucher (Voucher): Gift card voucher object to send
+            claim_reference (str): Unique claim reference for the recipient
+            
+        Returns:
+            bool: True if sent successfully, False otherwise
+        """
+        try:
+            from django.conf import settings
+            
+            # Format phone number for SMS (E.164 format required by SNS)
+            formatted_phone = self._format_phone_for_sms(phone_number)
+            if not formatted_phone:
+                print(f"Invalid phone number format: {phone_number}")
+                return False
+            
+            # Create message with claim reference
+            message_body = f"""🎁 Gift Card: {voucher.title}
+
+{voucher.message}
+
+🏪 Merchant: {voucher.merchant.business_name}
+📍 Location: {voucher.merchant.city}, {voucher.merchant.state}
+
+💳 Voucher Type: {voucher.voucher_type.name}
+💰 Value: {self.get_voucher_value(voucher)}
+
+🔑 Claim Reference: {claim_reference}
+
+To claim this gift card:
+1. Visit: https://bartr.club/claim-gift-card/{claim_reference}
+2. Or show this reference to the merchant
+
+This gift card can only be claimed once by the recipient."""
+            
+            # AWS SNS configuration
+            aws_access_key_id = getattr(settings, 'AWS_ACCESS_KEY_ID', None)
+            aws_secret_access_key = getattr(settings, 'AWS_SECRET_ACCESS_KEY', None)
+            aws_region = getattr(settings, 'AWS_SNS_REGION', 'us-east-1')
+            
+            if not aws_access_key_id or not aws_secret_access_key:
+                print("AWS SNS configuration missing. Please check AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY settings.")
+                return False
+            
+            # Initialize SNS client
+            sns_client = boto3.client(
+                'sns',
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                region_name=aws_region
+            )
+            
+            print(f"Sending AWS SNS SMS to {formatted_phone}")
+            
+            # Send SMS via AWS SNS
+            response = sns_client.publish(
+                PhoneNumber=formatted_phone,
+                Message=message_body,
+                MessageAttributes={
+                    'AWS.SNS.SMS.SMSType': {
+                        'DataType': 'String',
+                        'StringValue': 'Transactional'
+                    }
+                }
+            )
+            
+            message_id = response.get('MessageId', 'unknown')
+            print(f"AWS SNS SMS sent successfully to {formatted_phone}. Message ID: {message_id}")
+            return True
+            
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+            error_message = e.response.get('Error', {}).get('Message', str(e))
+            print(f"AWS SNS API error for {phone_number}: {error_code} - {error_message}")
+            return False
+        except BotoCoreError as e:
+            print(f"AWS SNS BotoCore error for {phone_number}: {str(e)}")
+            return False
+        except Exception as e:
+            print(f"Failed to send AWS SNS SMS to {phone_number}: {str(e)}")
+            return False
+
+    def _format_phone_for_sms(self, phone_number):
+        """
+        Format phone number for AWS SNS SMS (E.164 format).
+        
+        AWS SNS requires phone numbers in E.164 format: +[country code][number]
+        Example: +919876543210
+        
+        Args:
+            phone_number (str): Phone number in various formats
+            
+        Returns:
+            str: Formatted phone number in E.164 format, or None if invalid
+        """
+        try:
+            if not phone_number:
+                return None
+            
+            # Clean phone number (remove spaces, dashes, parentheses, +)
+            clean_phone = str(phone_number).strip().replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+            
+            # Remove + if present
+            if clean_phone.startswith('+'):
+                clean_phone = clean_phone[1:]
+            
+            # Handle different Indian phone number formats
+            if clean_phone.startswith('91') and len(clean_phone) == 12:
+                # Already has country code, return in E.164 format
+                return f"+{clean_phone}"
+            elif clean_phone.startswith('0') and len(clean_phone) == 11:
+                # Remove leading 0 and add country code
+                clean_phone = clean_phone[1:]
+                if len(clean_phone) == 10:
+                    return f"+91{clean_phone}"
+            elif len(clean_phone) == 10 and clean_phone.isdigit():
+                # 10 digit number, add country code
+                return f"+91{clean_phone}"
+            elif len(clean_phone) == 11 and clean_phone.isdigit():
+                # 11 digit number, might be with country code but without +
+                if clean_phone.startswith('91'):
+                    return f"+{clean_phone}"
+                else:
+                    return f"+91{clean_phone[1:]}"
+            
+            # If none of the above patterns match, return None
+            print(f"Invalid phone number format for SMS: {phone_number} -> {clean_phone}")
+            return None
+            
+        except Exception as e:
+            print(f"Error formatting phone number for SMS {phone_number}: {str(e)}")
             return None
 
     def get_voucher_value(self, voucher):
@@ -1808,6 +1986,57 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
             print(f"Error formatting phone number {phone_number}: {str(e)}")
             return None
 
+    def _format_phone_for_sms(self, phone_number):
+        """
+        Format phone number for AWS SNS SMS (E.164 format).
+        
+        AWS SNS requires phone numbers in E.164 format: +[country code][number]
+        Example: +919876543210
+        
+        Args:
+            phone_number (str): Phone number in various formats
+            
+        Returns:
+            str: Formatted phone number in E.164 format, or None if invalid
+        """
+        try:
+            if not phone_number:
+                return None
+            
+            # Clean phone number (remove spaces, dashes, parentheses, +)
+            clean_phone = str(phone_number).strip().replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+            
+            # Remove + if present
+            if clean_phone.startswith('+'):
+                clean_phone = clean_phone[1:]
+            
+            # Handle different Indian phone number formats
+            if clean_phone.startswith('91') and len(clean_phone) == 12:
+                # Already has country code, return in E.164 format
+                return f"+{clean_phone}"
+            elif clean_phone.startswith('0') and len(clean_phone) == 11:
+                # Remove leading 0 and add country code
+                clean_phone = clean_phone[1:]
+                if len(clean_phone) == 10:
+                    return f"+91{clean_phone}"
+            elif len(clean_phone) == 10 and clean_phone.isdigit():
+                # 10 digit number, add country code
+                return f"+91{clean_phone}"
+            elif len(clean_phone) == 11 and clean_phone.isdigit():
+                # 11 digit number, might be with country code but without +
+                if clean_phone.startswith('91'):
+                    return f"+{clean_phone}"
+                else:
+                    return f"+91{clean_phone[1:]}"
+            
+            # If none of the above patterns match, return None
+            print(f"Invalid phone number format for SMS: {phone_number} -> {clean_phone}")
+            return None
+            
+        except Exception as e:
+            print(f"Error formatting phone number for SMS {phone_number}: {str(e)}")
+            return None
+
     def check_whatsapp_status(self, phone_number):
         """Check if a phone number is registered on WhatsApp using RapidAPI"""
         try:
@@ -2182,6 +2411,112 @@ class WhatsAppContactViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response(
                 {"error": f"Failed to send WhatsApp test message: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=["post"], url_path="test-sns-sms-send")
+    def test_sns_sms_send(self, request):
+        """
+        Test AWS SNS SMS message sending.
+        
+        This endpoint allows testing AWS SNS SMS functionality by sending a test message
+        to a specified phone number.
+        
+        Request Body:
+            {
+                "phone_number": "+919876543210",
+                "message": "Test message from Bartr" (optional)
+            }
+            
+        Response:
+            {
+                "message": "AWS SNS SMS test message sent successfully",
+                "phone_number": "+919876543210",
+                "message_id": "12345678-1234-1234-1234-123456789012",
+                "status": "sent"
+            }
+        """
+        try:
+            phone_number = request.data.get('phone_number')
+            test_message = request.data.get('message', 'Test message from Bartr - AWS SNS SMS')
+            
+            if not phone_number:
+                return Response(
+                    {"error": "phone_number is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Format phone number for SMS
+            formatted_phone = self._format_phone_for_sms(phone_number)
+            if not formatted_phone:
+                return Response(
+                    {"error": "Invalid phone number format. Please use E.164 format (e.g., +919876543210)"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # AWS SNS configuration
+            from django.conf import settings
+            import boto3
+            from botocore.exceptions import ClientError, BotoCoreError
+            
+            aws_access_key_id = getattr(settings, 'AWS_ACCESS_KEY_ID', None)
+            aws_secret_access_key = getattr(settings, 'AWS_SECRET_ACCESS_KEY', None)
+            aws_region = getattr(settings, 'AWS_SNS_REGION', 'us-east-1')
+            
+            if not aws_access_key_id or not aws_secret_access_key:
+                return Response(
+                    {"error": "AWS SNS configuration missing. Please check AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY settings."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Initialize SNS client
+            sns_client = boto3.client(
+                'sns',
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                region_name=aws_region
+            )
+            
+            # Send SMS via AWS SNS
+            response = sns_client.publish(
+                PhoneNumber=formatted_phone,
+                Message=test_message,
+                MessageAttributes={
+                    'AWS.SNS.SMS.SMSType': {
+                        'DataType': 'String',
+                        'StringValue': 'Transactional'
+                    }
+                }
+            )
+            
+            message_id = response.get('MessageId', 'unknown')
+            
+            return Response({
+                "message": "AWS SNS SMS test message sent successfully",
+                "phone_number": formatted_phone,
+                "message_id": message_id,
+                "status": "sent",
+                "region": aws_region
+            })
+            
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+            error_message = e.response.get('Error', {}).get('Message', str(e))
+            return Response(
+                {
+                    "error": f"Failed to send AWS SNS SMS: {error_code}",
+                    "error_details": error_message
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except BotoCoreError as e:
+            return Response(
+                {"error": f"AWS SNS BotoCore error: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to send AWS SNS SMS test message: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

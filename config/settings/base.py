@@ -56,6 +56,11 @@ META_WHATSAPP_ACCESS_TOKEN = env('META_WHATSAPP_ACCESS_TOKEN', default='')
 META_WHATSAPP_API_VERSION = env('META_WHATSAPP_API_VERSION', default='v18.0')
 META_WHATSAPP_BUSINESS_ACCOUNT_ID = env('META_WHATSAPP_BUSINESS_ACCOUNT_ID', default='')
 
+# AWS SNS SMS Configuration
+# --------------------------------------------------------------------------
+# AWS credentials are already configured in production settings (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+AWS_SNS_REGION = env('AWS_SNS_REGION', default='ap-south-1')
+
 # Application definition
 
 DJANGO_APPS = [
