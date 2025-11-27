@@ -4,7 +4,7 @@ from .base import * # NOQA
 DEBUG = True
 
 # ALLOWED_HOSTS = ['*']
-ALLOWED_HOSTS = ['localhost','127.0.0.1','0.0.0.0','bartrlatest-8l446.sevalla.app','api.bartr.club', '13.201.184.242']
+ALLOWED_HOSTS = ['localhost','127.0.0.1','0.0.0.0','bartrlatest-8l446.sevalla.app','api.bartr.club', '13.201.184.242', 'fingerprints.bablosoft.com']
 
 CSRF_TRUSTED_ORIGINS = [
     'https://*.kinsta.app',
