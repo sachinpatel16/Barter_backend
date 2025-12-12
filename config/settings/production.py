@@ -19,7 +19,8 @@ CORS_ALLOWED_ORIGINS = [
     'https://api.bartr.club',
     'http://localhost:3000',
     'http://127.0.0.1:3000',
-    # 'https://5daa0dc5b024.ngrok-free.app'
+    'http://13.201.184.242:8080',
+    'http://13.201.184.242',
 ]
 
 CORS_ALLOWED_ORIGIN_REGEXES = [
