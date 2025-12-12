@@ -1,15 +1,13 @@
 from .base import * # NOQA
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
-# ALLOWED_HOSTS = ['*']
-ALLOWED_HOSTS = ['localhost','127.0.0.1','0.0.0.0','bartrlatest-8l446.sevalla.app','api.bartr.club', '13.201.184.242', 'fingerprints.bablosoft.com']
+ALLOWED_HOSTS = ['*']
+# ALLOWED_HOSTS = ['localhost','127.0.0.1','0.0.0.0','api.bartr.club', '13.201.184.242', 'fingerprints.bablosoft.com']
 
 CSRF_TRUSTED_ORIGINS = [
     'https://*.kinsta.app',
-    'https://*.sevalla.app',
-    'https://bartrlatest-8l446.sevalla.app',
     'https://api.bartr.club',
     # 'https://5daa0dc5b024.ngrok-free.app'
 ]
@@ -18,7 +16,6 @@ CSRF_TRUSTED_ORIGINS = [
 CORS_ORIGIN_ALLOW_ALL = True
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
-    'https://bartrlatest-8l446.sevalla.app',
     'https://api.bartr.club',
     'http://localhost:3000',
     'http://127.0.0.1:3000',
