@@ -1,7 +1,7 @@
 from .base import * # NOQA
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 # ALLOWED_HOSTS = ['localhost','127.0.0.1','0.0.0.0','api.bartr.club', '13.201.184.242', 'fingerprints.bablosoft.com']
@@ -9,6 +9,8 @@ ALLOWED_HOSTS = ['*']
 CSRF_TRUSTED_ORIGINS = [
     'https://*.kinsta.app',
     'https://api.bartr.club',
+    'http://13.201.184.242:8080',
+    'http://13.201.184.242',
     # 'https://5daa0dc5b024.ngrok-free.app'
 ]
 
